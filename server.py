@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import json
 import urllib.request
+import urllib.error
 import traceback
 
 app = Flask(__name__)
@@ -40,8 +41,8 @@ def chat():
         return jsonify({'reply': 'No escuché ningún mensaje.', 'estado_rele': estado_rele}), 400
 
     try:
-        # Petición HTTP directa a Google Gemini (Compatible con claves AQ... y AIza...)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        # Petición a la API de Gemini
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         
         prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
         
@@ -53,13 +54,18 @@ def chat():
             ]
         }
 
+        # Encabezados con el estándar x-goog-api-key para la clave AQ...
+        headers = {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key
+        }
+
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
+            headers=headers
         )
 
-        # Realizar la consulta a la nube
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             
@@ -78,11 +84,18 @@ def chat():
             'estado_rele': estado_rele
         })
 
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print("❌ ERROR HTTP DE GOOGLE:", error_body)
+        return jsonify({
+            'reply': f"Error de autenticación ({e.code}): Verifica que la clave en Render esté bien pegada.",
+            'estado_rele': estado_rele
+        }), 500
     except Exception as e:
         print("❌ ERROR EN EL SERVIDOR:", str(e))
         traceback.print_exc()
         return jsonify({
-            'reply': f"Tuve un detalle técnico con Gemini: {str(e)}", 
+            'reply': f"Tuve un detalle técnico: {str(e)}", 
             'estado_rele': estado_rele
         }), 500
 
