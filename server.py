@@ -5,12 +5,12 @@ import json
 import urllib.request
 import urllib.error
 import traceback
+import time
 
 app = Flask(__name__)
 CORS(app)
 
 estado_rele = "OFF"
-modelo_activo = None  # Guardará el modelo que funcione automáticamente
 
 PROMPT_LOGAN = """
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
@@ -23,65 +23,43 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
   Debes incluir EXACTAMENTE el texto [[LUZ:OFF]] en alguna parte de tu respuesta.
 """
 
-# Lista de modelos oficiales de Gemini a probar en automático
-MODELOS_CANDIDATOS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash-8b",
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash"
-]
+MODELOS_COMPATIBLES = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
-def generar_respuesta_gemini(api_key, prompt):
-    global modelo_activo
-    
-    # Si ya descubrimos cuál funciona en tu cuenta, usamos ese primero
-    if modelo_activo:
-        modelos_a_intentar = [modelo_activo] + [m for m in MODELOS_CANDIDATOS if m != modelo_activo]
-    else:
-        modelos_a_intentar = MODELOS_CANDIDATOS
-    
-    errores = []
+def llamar_gemini(api_key, prompt):
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': api_key
+    }
 
-    for modelo in modelos_a_intentar:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
-            payload = {
-                "contents": [
-                    {"parts": [{"text": prompt}]}
-                ]
-            }
-            headers = {
-                'Content-Type': 'application/json',
-                'x-goog-api-key': api_key
-            }
-
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers=headers
-            )
-
-            with urllib.request.urlopen(req) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
+    for modelo in MODELOS_COMPATIBLES:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
+        
+        # Intentamos hasta 2 veces por modelo en caso de rebasar la velocidad
+        for intento in range(2):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode('utf-8'),
+                    headers=headers
+                )
+                with urllib.request.urlopen(req) as response:
+                    res_data = json.loads(response.read().decode('utf-8'))
                 
-            reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
-            
-            # ¡Guardamos el modelo que funcionó!
-            if modelo_activo != modelo:
-                print(f"✅ ¡Modelo detectado y funcionando: {modelo}!")
-                modelo_activo = modelo
-                
-            return reply_text
+                return res_data['candidates'][0]['content']['parts'][0]['text']
 
-        except urllib.error.HTTPError as e:
-            errores.append(f"{modelo} (HTTP {e.code})")
-            continue
-        except Exception as e:
-            errores.append(f"{modelo} ({str(e)})")
-            continue
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and intento == 0:
+                    # Esperar 2 segundos por si es solo un pico de frecuencia
+                    time.sleep(2)
+                    continue
+                break
+            except Exception:
+                break
 
-    raise Exception(f"Ningún modelo respondió. Resultados: {', '.join(errores)}")
+    raise Exception("Límite de peticiones alcanzado temporalmente en Gemini 2.0. Intenta de nuevo en unos segundos.")
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -100,8 +78,7 @@ def chat():
 
     try:
         prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
-        
-        reply_text = generar_respuesta_gemini(api_key, prompt_final)
+        reply_text = llamar_gemini(api_key, prompt_final)
 
         if "[[LUZ:ON]]" in reply_text:
             estado_rele = "ON"
@@ -119,7 +96,7 @@ def chat():
         print("❌ ERROR GENERAL:", str(e))
         traceback.print_exc()
         return jsonify({
-            'reply': f"Detalle técnico: {str(e)}", 
+            'reply': f"Logan: {str(e)}", 
             'estado_rele': estado_rele
         }), 500
 
@@ -129,7 +106,7 @@ def esp32_status():
 
 @app.route('/status', methods=['GET'])
 def status():
-    return f"<h1>Logan Server Activo</h1><p>Modelo activo: <b>{modelo_activo or 'Buscando...'}</b></p><p>Estado del Relé: <b>{estado_rele}</b></p>"
+    return f"<h1>Logan Server Activo</h1><p>Estado del Relé: <b>{estado_rele}</b></p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
