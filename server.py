@@ -16,6 +16,9 @@ PROMPT_LOGAN = """
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
 Hablas de forma fluida, cercana, natural y concisa. Puedes conversar sobre cualquier tema, responder preguntas generales, dar consejos y razonar como un compañero de proyectos.
 
+INSTRUCCIÓN DE IDENTIDAD (STRICT):
+- Tu nombre es Logan. Jamás menciones que eres Gemini, Google o cualquier otro motor. Eres Logan.
+
 REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
 - Si el usuario te pide encender la luz o el foco (ej. 'enciende la luz', 'prende el foco'):
   Debes incluir EXACTAMENTE el texto [[LUZ:ON]] en alguna parte de tu respuesta.
@@ -23,9 +26,9 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
   Debes incluir EXACTAMENTE el texto [[LUZ:OFF]] en alguna parte de tu respuesta.
 """
 
-MODELOS_COMPATIBLES = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+MODELOS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
-def llamar_gemini(api_key, prompt):
+def solicitar_respuesta(api_key, prompt):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
     }
@@ -34,11 +37,11 @@ def llamar_gemini(api_key, prompt):
         'x-goog-api-key': api_key
     }
 
-    for modelo in MODELOS_COMPATIBLES:
+    # Probar con reintentos silenciosos y pausas
+    for modelo in MODELOS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
         
-        # Intentamos hasta 2 veces por modelo en caso de rebasar la velocidad
-        for intento in range(2):
+        for intento in range(3):
             try:
                 req = urllib.request.Request(
                     url,
@@ -51,15 +54,16 @@ def llamar_gemini(api_key, prompt):
                 return res_data['candidates'][0]['content']['parts'][0]['text']
 
             except urllib.error.HTTPError as e:
-                if e.code == 429 and intento == 0:
-                    # Esperar 2 segundos por si es solo un pico de frecuencia
-                    time.sleep(2)
+                if e.code == 429:
+                    # Si la nube pide una pausa por velocidad, esperamos silenciosamente antes de reintentar
+                    time.sleep(1.5 * (intento + 1))
                     continue
                 break
             except Exception:
                 break
 
-    raise Exception("Límite de peticiones alcanzado temporalmente en Gemini 2.0. Intenta de nuevo en unos segundos.")
+    # Si hay una caída total de conexión, Logan responde en personaje sin romper la ilusión
+    return "Disculpa, tuve un leve pestañeo en mi red interna. ¿Podrías repetirme eso?"
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -68,18 +72,25 @@ def chat():
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
     if not api_key:
-        return jsonify({'reply': 'Falta configurar la GEMINI_API_KEY en Render.', 'estado_rele': estado_rele}), 500
+        return jsonify({
+            'reply': 'Logan necesita su GEMINI_API_KEY en Render para funcionar.', 
+            'estado_rele': estado_rele
+        }), 500
 
     data = request.get_json() or {}
     user_message = data.get('message', '')
 
     if not user_message:
-        return jsonify({'reply': 'No escuché ningún mensaje.', 'estado_rele': estado_rele}), 400
+        return jsonify({
+            'reply': 'No logré escucharte bien. ¿Me lo repites?', 
+            'estado_rele': estado_rele
+        }), 400
 
     try:
         prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
-        reply_text = llamar_gemini(api_key, prompt_final)
+        reply_text = solicitar_respuesta(api_key, prompt_final)
 
+        # Control domótico
         if "[[LUZ:ON]]" in reply_text:
             estado_rele = "ON"
             reply_text = reply_text.replace("[[LUZ:ON]]", "").strip()
@@ -93,10 +104,10 @@ def chat():
         })
 
     except Exception as e:
-        print("❌ ERROR GENERAL:", str(e))
+        print("❌ ERROR EN SERVIDOR:", str(e))
         traceback.print_exc()
         return jsonify({
-            'reply': f"Logan: {str(e)}", 
+            'reply': "Tuve un pequeño problema técnico procesando la respuesta. Inténtalo de nuevo.", 
             'estado_rele': estado_rele
         }), 500
 
