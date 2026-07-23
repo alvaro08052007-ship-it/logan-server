@@ -27,7 +27,7 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
   Debes incluir EXACTAMENTE el texto [[LUZ:OFF]] en alguna parte de tu respuesta.
 """
 
-# Modelos ultrapotentes y gratuitos de Groq
+# Modelos disponibles en Groq
 MODELOS_GROQ = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
@@ -37,9 +37,11 @@ MODELOS_GROQ = [
 def consultar_groq(api_key, user_message):
     url = "https://api.groq.com/openai/v1/chat/completions"
     
+    # Agregamos User-Agent para superar la protección de Cloudflare (Error 1010)
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}'
+        'Authorization': f'Bearer {api_key}',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
     ultimo_error = ""
