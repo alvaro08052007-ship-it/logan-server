@@ -1,58 +1,52 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 import os
+import traceback
 
 app = Flask(__name__)
 CORS(app)
 
 # Configuración de API Key de Gemini
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+api_key = os.environ.get("GEMINI_API_KEY")
+if api_key:
+    genai.configure(api_key=api_key)
 
-# Variable global para recordar el estado de la luz
+# Variable global para el relé
 estado_rele = "OFF"
 
-# Configuración del Modelo y Personalidad de Logan
-system_instruction = """
-Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, con un toque sutil de ingenio y gran capacidad conversacional.
-Tus respuestas deben ser naturales, claras y concisas, conversando de tú a tú como un colaborador brillante.
+# Instrucciones de Personalidad de Logan
+PROMPT_LOGAN = """
+Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
+Hablas de forma fluida, cercana, natural y concisa. Puedes conversar sobre cualquier tema, responder preguntas generales, dar consejos y razonar como un compañero de proyectos.
 
-INSTRUCCIONES CLAVE PARA CONTROL IOT:
-- Si el usuario te pide encender la luz o el foco (ejemplo: 'enciende la luz', 'prende el foco', 'que se haga la luz'):
-  Debes incluir EXACTAMENTE el comando [[LUZ:ON]] en alguna parte de tu respuesta.
-- Si el usuario te pide apagar la luz (ejemplo: 'apaga la luz', 'deja a oscuras el cuarto'):
-  Debes incluir EXACTAMENTE el comando [[LUZ:OFF]] en alguna parte de tu respuesta.
-
-Ejemplo de respuesta:
-"¡Entendido! Encendiendo las luces de la habitación. [[LUZ:ON]] ¿Hay algo más en lo que te pueda colaborar hoy?"
-"Con gusto, apago las luces. [[LUZ:OFF]] Quedo atento si necesitas algo más."
-
-Mantén la conversación fluida, amable y cercana.
+REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
+- Si el usuario te pide encender la luz o el foco (ej. 'enciende la luz', 'prende el foco'):
+  Debes incluir EXACTAMENTE el texto [[LUZ:ON]] en alguna parte de tu respuesta.
+- Si el usuario te pide apagar la luz (ej. 'apaga la luz', 'deja todo a oscuras'):
+  Debes incluir EXACTAMENTE el texto [[LUZ:OFF]] en alguna parte de tu respuesta.
 """
-
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=system_instruction
-)
-
-# Guardar historial simple en memoria
-chat_session = model.start_chat(history=[])
 
 @app.route('/chat', methods=['POST'])
 def chat():
     global estado_rele
-    data = request.get_json()
+    data = request.get_json() or {}
     user_message = data.get('message', '')
 
     if not user_message:
         return jsonify({'reply': 'No escuché ningún mensaje.', 'estado_rele': estado_rele}), 400
 
     try:
-        # Generar respuesta usando la sesión conversacional
-        response = chat_session.send_message(user_message)
-        reply_text = response.text
+        # Inicializamos el modelo de Gemini
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
-        # Detectar comandos IoT en la respuesta
+        # Construimos la petición con la personalidad + el mensaje del usuario
+        prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
+        
+        response = model.generate_content(prompt_final)
+        reply_text = response.text if response.text else "No logré generar una respuesta."
+
+        # Detectar comandos de control
         if "[[LUZ:ON]]" in reply_text:
             estado_rele = "ON"
             reply_text = reply_text.replace("[[LUZ:ON]]", "").strip()
@@ -66,8 +60,13 @@ def chat():
         })
 
     except Exception as e:
-        print("Error:", e)
-        return jsonify({'reply': 'Tuve un pequeño contratiempo al procesar la idea. ¿Me lo repites?', 'estado_rele': estado_rele}), 500
+        print("❌ ERROR EN EL SERVIDOR:", str(e))
+        traceback.print_exc()
+        # Si falla, nos dirá la causa exacta del error
+        return jsonify({
+            'reply': f"Tuve un detalle técnico con Gemini: {str(e)}", 
+            'estado_rele': estado_rele
+        }), 500
 
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
