@@ -9,10 +9,8 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# Variable global para el relé
 estado_rele = "OFF"
 
-# Personalidad e instrucciones de Logan
 PROMPT_LOGAN = """
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
 Hablas de forma fluida, cercana, natural y concisa. Puedes conversar sobre cualquier tema, responder preguntas generales, dar consejos y razonar como un compañero de proyectos.
@@ -28,7 +26,6 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
 def chat():
     global estado_rele
     
-    # Obtener API Key de Render
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
     if not api_key:
@@ -41,8 +38,8 @@ def chat():
         return jsonify({'reply': 'No escuché ningún mensaje.', 'estado_rele': estado_rele}), 400
 
     try:
-        # Petición a la API de Gemini
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        # Enviamos la clave tanto en la URL como en el encabezado para cubrir todas las variantes de Google
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         
         prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
         
@@ -54,7 +51,6 @@ def chat():
             ]
         }
 
-        # Encabezados con el estándar x-goog-api-key para la clave AQ...
         headers = {
             'Content-Type': 'application/json',
             'x-goog-api-key': api_key
@@ -71,7 +67,6 @@ def chat():
             
         reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
 
-        # Detectar comandos de control domótico
         if "[[LUZ:ON]]" in reply_text:
             estado_rele = "ON"
             reply_text = reply_text.replace("[[LUZ:ON]]", "").strip()
@@ -86,9 +81,10 @@ def chat():
 
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8')
-        print("❌ ERROR HTTP DE GOOGLE:", error_body)
+        print("❌ ERROR DETALLADO DE GOOGLE:", error_body)
+        # Mostramos el error real en la pantalla
         return jsonify({
-            'reply': f"Error de autenticación ({e.code}): Verifica que la clave en Render esté bien pegada.",
+            'reply': f"Google rechazó la clave ({e.code}): {error_body}",
             'estado_rele': estado_rele
         }), 500
     except Exception as e:
