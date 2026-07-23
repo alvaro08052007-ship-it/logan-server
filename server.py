@@ -30,6 +30,12 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
 @app.route('/chat', methods=['POST'])
 def chat():
     global estado_rele
+
+    # 🔑 PASO CLAVE: Leer y configurar la API Key guardada en Render
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if api_key:
+        genai.configure(api_key=api_key)
+
     data = request.get_json() or {}
     user_message = data.get('message', '')
 
@@ -62,7 +68,6 @@ def chat():
     except Exception as e:
         print("❌ ERROR EN EL SERVIDOR:", str(e))
         traceback.print_exc()
-        # Si falla, nos dirá la causa exacta del error
         return jsonify({
             'reply': f"Tuve un detalle técnico con Gemini: {str(e)}", 
             'estado_rele': estado_rele
