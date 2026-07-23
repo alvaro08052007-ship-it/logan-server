@@ -8,7 +8,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuración de API Key de Gemini
-api_key = os.environ.get("GEMINI_API_KEY", " ").strip()
+api_key = os.environ.get("GEMINI_API_KEY", "").strip()
 if api_key:
     genai.configure(api_key=api_key)
 
