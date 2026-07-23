@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logan AI Assistant</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #0d1117;
+            color: #e6edf3;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 450px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        .avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #00f2fe, #4facfe);
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            box-shadow: 0 0 20px rgba(79, 172, 254, 0.4);
+        }
+
+        h1 { font-size: 24px; margin-bottom: 5px; }
+        .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 25px; }
+
+        .status-card {
+            background: #21262d;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #8b949e;
+        }
+
+        .status-indicator.on { background-color: #2ea043; box-shadow: 0 0 10px #2ea043; }
+        .status-indicator.off { background-color: #da3633; }
+
+        .chat-box {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 15px;
+            min-height: 80px;
+            margin-bottom: 20px;
+            font-size: 15px;
+            color: #58a6ff;
+            text-align: left;
+        }
+
+        .mic-btn {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: none;
+            background: #238636;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
+        }
+
+        .mic-btn:active, .mic-btn.listening {
+            background: #da3633;
+            transform: scale(1.05);
+            box-shadow: 0 0 25px rgba(218, 54, 51, 0.6);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 10px;
+            color: white;
+            outline: none;
+        }
+
+        button.send-btn {
+            background: #1f6feb;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 15px;
+            color: white;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="avatar">🐺</div>
+        <h1>Logan AI</h1>
+        <p class="subtitle">Asistente IoT de Hogar</p>
+
+        <div class="status-card">
+            <span>Estado Luz:</span>
+            <span id="light-status" class="status-indicator"></span>
+        </div>
+
+        <div id="chat-box" class="chat-box">
+            Presiona el micrófono o escribe un mensaje para hablar con Logan...
+        </div>
+
+        <button id="mic-btn" class="mic-btn" onclick="toggleVoice()">🎙️</button>
+
+        <div class="input-group">
+            <input type="text" id="text-input" placeholder="Escribe tu comando..." onkeypress="handleKey(event)">
+            <button class="send-btn" onclick="enviarTexto()">Enviar</button>
+        </div>
+    </div>
+
+    <script>
+        const chatBox = document.getElementById('chat-box');
+        const lightStatus = document.getElementById('light-status');
+        const micBtn = document.getElementById('mic-btn');
+
+        // Reconocimiento de Voz del Navegador
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition = null;
+
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'es-ES';
+
+            recognition.onstart = () => {
+                micBtn.classList.add('listening');
+                chatBox.innerText = "Escuchando...";
+            };
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                chatBox.innerText = `Tú: "${transcript}"`;
+                procesarComando(transcript);
+            };
+
+            recognition.onend = () => {
+                micBtn.classList.remove('listening');
+            };
+        }
+
+        function toggleVoice() {
+            if (recognition) {
+                recognition.start();
+            } else {
+                alert("Tu navegador no soporta reconocimiento de voz directo.");
+            }
+        }
+
+        function handleKey(e) {
+            if (e.key === 'Enter') enviarTexto();
+        }
+
+        function enviarTexto() {
+            const input = document.getElementById('text-input');
+            if (input.value.trim() !== "") {
+                chatBox.innerText = `Tú: "${input.value}"`;
+                procesarComando(input.value);
+                input.value = "";
+            }
+        }
+
+        // 🔊 Función para hacer que Logan hable con altavoces/parlantes del dispositivo
+        function hablar(texto) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel(); // Cancela audios previos si los hay
+                const utterance = new SpeechSynthesisUtterance(texto);
+                utterance.lang = 'es-ES';
+                utterance.rate = 1.0; // Velocidad normal
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        async function procesarComando(texto) {
+            try {
+                // 🌐 Conexión con el Servidor en la Nube de Render
+                const response = await fetch('https://logan-server-ba38.onrender.com/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: texto })
+                });
+
+                const data = await response.json();
+                
+                // Mostrar texto de respuesta
+                chatBox.innerText = `Logan: ${data.reply}`;
+
+                // 📢 Reproducir respuesta en Voz Alta
+                hablar(data.reply);
+
+                // Actualizar luz en pantalla
+                if (data.estado_rele === "ON") {
+                    lightStatus.className = "status-indicator on";
+                } else if (data.estado_rele === "OFF") {
+                    lightStatus.className = "status-indicator off";
+                }
+            } catch (err) {
+                chatBox.innerText = "Error al conectar con Logan en la nube.";
+            }
+        }
+    </script>
+</body>
+</html>
