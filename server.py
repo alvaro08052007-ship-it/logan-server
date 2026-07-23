@@ -5,7 +5,6 @@ import json
 import urllib.request
 import urllib.error
 import traceback
-import time
 
 app = Flask(__name__)
 CORS(app)
@@ -26,7 +25,11 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
   Debes incluir EXACTAMENTE el texto [[LUZ:OFF]] en alguna parte de tu respuesta.
 """
 
-MODELOS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+# Probamos endpoints oficiales
+OPCIONES_API = [
+    ("https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent", "v1-gemini-1.5-flash"),
+    ("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", "v1beta-gemini-2.0-flash")
+]
 
 def solicitar_respuesta(api_key, prompt):
     payload = {
@@ -37,33 +40,30 @@ def solicitar_respuesta(api_key, prompt):
         'x-goog-api-key': api_key
     }
 
-    # Probar con reintentos silenciosos y pausas
-    for modelo in MODELOS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key}"
-        
-        for intento in range(3):
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode('utf-8'),
-                    headers=headers
-                )
-                with urllib.request.urlopen(req) as response:
-                    res_data = json.loads(response.read().decode('utf-8'))
-                
-                return res_data['candidates'][0]['content']['parts'][0]['text']
+    ultimo_error = ""
 
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    # Si la nube pide una pausa por velocidad, esperamos silenciosamente antes de reintentar
-                    time.sleep(1.5 * (intento + 1))
-                    continue
-                break
-            except Exception:
-                break
+    for url_base, nombre in OPCIONES_API:
+        url = f"{url_base}?key={api_key}"
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers
+            )
+            with urllib.request.urlopen(req) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+            
+            return res_data['candidates'][0]['content']['parts'][0]['text']
 
-    # Si hay una caída total de conexión, Logan responde en personaje sin romper la ilusión
-    return "Disculpa, tuve un leve pestañeo en mi red interna. ¿Podrías repetirme eso?"
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode('utf-8')
+            ultimo_error = f"{nombre} ({e.code}): {err_msg}"
+            continue
+        except Exception as e:
+            ultimo_error = f"{nombre}: {str(e)}"
+            continue
+
+    raise Exception(ultimo_error)
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -73,7 +73,7 @@ def chat():
 
     if not api_key:
         return jsonify({
-            'reply': 'Logan necesita su GEMINI_API_KEY en Render para funcionar.', 
+            'reply': 'Falta configurar la GEMINI_API_KEY en Render.', 
             'estado_rele': estado_rele
         }), 500
 
@@ -82,7 +82,7 @@ def chat():
 
     if not user_message:
         return jsonify({
-            'reply': 'No logré escucharte bien. ¿Me lo repites?', 
+            'reply': 'No escuché ningún mensaje.', 
             'estado_rele': estado_rele
         }), 400
 
@@ -107,7 +107,7 @@ def chat():
         print("❌ ERROR EN SERVIDOR:", str(e))
         traceback.print_exc()
         return jsonify({
-            'reply': "Tuve un pequeño problema técnico procesando la respuesta. Inténtalo de nuevo.", 
+            'reply': f"Detalle de red: {str(e)[:150]}", 
             'estado_rele': estado_rele
         }), 500
 
