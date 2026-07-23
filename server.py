@@ -1,21 +1,17 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
 import os
+import json
+import urllib.request
 import traceback
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuración de API Key de Gemini
-api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-if api_key:
-    genai.configure(api_key=api_key)
-
 # Variable global para el relé
 estado_rele = "OFF"
 
-# Instrucciones de Personalidad de Logan
+# Personalidad e instrucciones de Logan
 PROMPT_LOGAN = """
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
 Hablas de forma fluida, cercana, natural y concisa. Puedes conversar sobre cualquier tema, responder preguntas generales, dar consejos y razonar como un compañero de proyectos.
@@ -30,11 +26,12 @@ REGLAS DE CONTROL DOMÓTICO (OBLIGATORIAS):
 @app.route('/chat', methods=['POST'])
 def chat():
     global estado_rele
-
-    # 🔑 PASO CLAVE: Leer y configurar la API Key guardada en Render
+    
+    # Obtener API Key de Render
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key:
-        genai.configure(api_key=api_key)
+
+    if not api_key:
+        return jsonify({'reply': 'Falta configurar la GEMINI_API_KEY en Render.', 'estado_rele': estado_rele}), 500
 
     data = request.get_json() or {}
     user_message = data.get('message', '')
@@ -43,16 +40,32 @@ def chat():
         return jsonify({'reply': 'No escuché ningún mensaje.', 'estado_rele': estado_rele}), 400
 
     try:
-        # Inicializamos el modelo de Gemini
-        model = genai.GenerativeModel('gemini-1.5-flash')
-
-        # Construimos la petición con la personalidad + el mensaje del usuario
+        # Petición HTTP directa a Google Gemini (Compatible con claves AQ... y AIza...)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
         prompt_final = f"{PROMPT_LOGAN}\n\nUsuario dice: {user_message}\nLogan responde:"
         
-        response = model.generate_content(prompt_final)
-        reply_text = response.text if response.text else "No logré generar una respuesta."
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt_final}]
+                }
+            ]
+        }
 
-        # Detectar comandos de control
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+
+        # Realizar la consulta a la nube
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            
+        reply_text = res_data['candidates'][0]['content']['parts'][0]['text']
+
+        # Detectar comandos de control domótico
         if "[[LUZ:ON]]" in reply_text:
             estado_rele = "ON"
             reply_text = reply_text.replace("[[LUZ:ON]]", "").strip()
