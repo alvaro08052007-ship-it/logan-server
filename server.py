@@ -69,7 +69,7 @@ def solicitar_respuesta(api_key, prompt):
 def chat():
     global estado_rele
     
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     if not api_key:
         return jsonify({
