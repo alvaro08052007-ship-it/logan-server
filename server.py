@@ -11,22 +11,37 @@ app = Flask(__name__)
 CORS(app)
 
 # ==============================================================================
-# ESTADOS GLOBALES Y MEMORIA
+# CONEXIÓN A BASE DE DATOS (MONGODB)
 # ==============================================================================
-estado_rele = "OFF"
-orden_pc_pendiente = None  
+MONGO_URI = os.environ.get("MONGO_URI", "").strip()
+perfil_col = None
 
-PERFIL_FILE = "perfil_usuario.json"
+if MONGO_URI:
+    try:
+        import pymongo
+        import certifi
+        client = pymongo.MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+        db = client["logan_db"]
+        perfil_col = db["perfil"]
+        print("✅ Conectado exitosamente a MongoDB Atlas")
+    except Exception as e:
+        print("⚠️ Error conectando a MongoDB Atlas:", e)
+
+estado_rele = "OFF"
+cola_ordenes_pc = []  # COLA DE MENSAJES (Sustituye la variable única para no perder órdenes)
 HISTORIAL = []       
 MAX_HISTORIAL = 10   
 
 def cargar_perfil():
-    if os.path.exists(PERFIL_FILE):
+    if perfil_col is not None:
         try:
-            with open(PERFIL_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            doc = perfil_col.find_one({"_id": "usuario_principal"})
+            if doc:
+                doc.pop("_id", None)
+                return doc
         except Exception as e:
-            print("⚠️ No se pudo cargar el perfil:", e)
+            print("⚠️ Error leyendo perfil de DB:", e)
+            
     return {
         "nombre_usuario": "Amigo",
         "trato": "informal, cercano y natural",
@@ -34,45 +49,44 @@ def cargar_perfil():
     }
 
 def guardar_perfil(perfil):
-    try:
-        with open(PERFIL_FILE, "w", encoding="utf-8") as f:
-            json.dump(perfil, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print("❌ Error guardando el perfil:", e)
-
-perfil_usuario = cargar_perfil()
+    if perfil_col is not None:
+        try:
+            perfil_col.update_one(
+                {"_id": "usuario_principal"},
+                {"$set": perfil},
+                upsert=True
+            )
+            print("🧠 Memoria actualizada en MongoDB.")
+        except Exception as e:
+            print("❌ Error guardando perfil en DB:", e)
 
 def construir_prompt_sistema():
-    perfil_str = json.dumps(perfil_usuario, ensure_ascii=False, indent=2)
+    perfil_actual = cargar_perfil()
+    perfil_str = json.dumps(perfil_actual, ensure_ascii=False, indent=2)
     
     return f"""
-Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
-Hablas de forma fluida, cercana, natural y concisa (máximo 2 a 3 oraciones para ser ágil al hablar).
+Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante y muy eficiente.
+Hablas de forma fluida, cercana, natural y concisa (máximo 2 oraciones breves).
 
 INSTRUCCIÓN DE IDENTIDAD (STRICT):
 - Tu nombre es Logan. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan.
 
 PERFIL Y MEMORIA DEL USUARIO:
 {perfil_str}
-- IMPORTANTE: Adapta tu tono, trato y vocabulario según lo aprendido en el perfil anterior.
 
 REGLAS DE CONTROL DOMÓTICO (ESP32):
 - Encender luz: [[LUZ:ON]]
 - Apagar luz: [[LUZ:OFF]]
 
 REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
-- ALARMAS / TEMPORIZADORES / RECORDATORIOS (NUEVO):
-  Si el usuario pide que le avises en cierto tiempo (ej. "avísame en 1 minuto", "pon alarma de 30 segundos"):
-  Debes incluir EXACTAMENTE [[ALARMA: segundos | mensaje_que_dira_logan_al_cumplirse_el_tiempo]]
-  Ejemplos:
-  - "avísame en 1 minuto que saque el café" -> [[ALARMA: 60 | ¡Oye! Ya pasó un minuto, recuerda sacar el café.]]
-  - "pon un temporizador de 10 segundos" -> [[ALARMA: 10 | ¡Tiempo cumplido! Pasaron los 10 segundos.]]
-
-- Reproducir música en SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
-- Pausar / Reanudar música: [[VOLUMEN: PAUSA]]
-- Abrir aplicaciones: [[EJECUTAR: nombre_app]]
-- Control de Volumen: [[VOLUMEN: SUBIR]], [[VOLUMEN: BAJAR]], [[VOLUMEN: MUTE]]
-- Control de Sistema: [[SISTEMA: BLOQUEAR]], [[SISTEMA: CAPTURA]], [[SISTEMA: APAGAR]]
+- PAUSAR O REANUDAR MÚSICA/MULTIMEDIA (Súper importante):
+  Si el usuario dice 'pausa', 'pon pausa', 'despausa', 'continúa', 'reproduce', 'sigue la música':
+  Debes responder e incluir OBLIGATORIAMENTE [[VOLUMEN: PAUSA]].
+- REPRODUCIR EN SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
+- TEMPORIZADORES/ALARMAS: [[ALARMA: segundos | mensaje]]
+- ABRIR APLICACIONES: [[EJECUTAR: nombre_app]]
+- CONTROL DE VOLUMEN: [[VOLUMEN: SUBIR]], [[VOLUMEN: BAJAR]], [[VOLUMEN: MUTE]]
+- SISTEMA: [[SISTEMA: BLOQUEAR]], [[SISTEMA: CAPTURA]], [[SISTEMA: APAGAR]]
 
 REGLA DE APRENDIZAJE AUTOMÁTICO:
 - Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
@@ -102,7 +116,7 @@ def consultar_groq(api_key, user_message):
         payload = {
             "model": modelo,
             "messages": messages_payload,
-            "temperature": 0.7
+            "temperature": 0.6
         }
 
         try:
@@ -127,7 +141,7 @@ def consultar_groq(api_key, user_message):
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    global estado_rele, perfil_usuario, HISTORIAL, orden_pc_pendiente
+    global estado_rele, HISTORIAL, cola_ordenes_pc
     
     api_key = os.environ.get("GROQ_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
 
@@ -144,70 +158,48 @@ def chat():
         reply_text = consultar_groq(api_key, user_message)
 
         # 1. CONTROL DOMÓTICO (ESP32)
-        if "[[LUZ:ON]]" in reply_text:
+        if "[[LUZ:ON]]" in reply_text.upper():
             estado_rele = "ON"
-            reply_text = reply_text.replace("[[LUZ:ON]]", "").strip()
-        elif "[[LUZ:OFF]]" in reply_text:
+            reply_text = re.sub(r"\[\[LUZ:ON\]\]", "", reply_text, flags=re.IGNORECASE).strip()
+        elif "[[LUZ:OFF]]" in reply_text.upper():
             estado_rele = "OFF"
-            reply_text = reply_text.replace("[[LUZ:OFF]]", "").strip()
+            reply_text = re.sub(r"\[\[LUZ:OFF\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
         comando_tipo = None
         comando_valor = None
 
-        # 2. CONTROL DE LAPTOP Y ALARMAS
-        if "[[ALARMA:" in reply_text:
-            match = re.search(r"\[\[ALARMA:\s*(.*?)\s*\]\]", reply_text)
-            if match:
-                comando_tipo = "ALARMA"
-                comando_valor = match.group(1)
-                reply_text = re.sub(r"\[\[ALARMA:.*?\]\]", "", reply_text).strip()
+        # 2. EXTRACCIÓN FLEXIBLE DE COMANDOS (Insensible a mayúsculas/minúsculas)
+        patron_etiquetas = r"\[\[(ALARMA|REPRODUCIR|VOLUMEN|SISTEMA|EJECUTAR):\s*(.*?)\s*\]\]"
+        coincidencia = re.search(patron_etiquetas, reply_text, re.IGNORECASE)
 
-        elif "[[REPRODUCIR:" in reply_text:
-            match = re.search(r"\[\[REPRODUCIR:\s*(.*?)\s*\]\]", reply_text)
-            if match:
-                comando_tipo = "REPRODUCIR"
-                comando_valor = match.group(1)
-                reply_text = re.sub(r"\[\[REPRODUCIR:.*?\]\]", "", reply_text).strip()
-
-        elif "[[VOLUMEN:" in reply_text:
-            match = re.search(r"\[\[VOLUMEN:\s*(.*?)\s*\]\]", reply_text)
-            if match:
-                comando_tipo = "VOLUMEN"
-                comando_valor = match.group(1).upper()
-                reply_text = re.sub(r"\[\[VOLUMEN:.*?\]\]", "", reply_text).strip()
-
-        elif "[[SISTEMA:" in reply_text:
-            match = re.search(r"\[\[SISTEMA:\s*(.*?)\s*\]\]", reply_text)
-            if match:
-                comando_tipo = "SISTEMA"
-                comando_valor = match.group(1).upper()
-                reply_text = re.sub(r"\[\[SISTEMA:.*?\]\]", "", reply_text).strip()
-
-        elif "[[EJECUTAR:" in reply_text:
-            match = re.search(r"\[\[EJECUTAR:\s*(.*?)\s*\]\]", reply_text)
-            if match:
-                comando_tipo = "EJECUTAR"
-                comando_valor = match.group(1).lower().strip()
-                reply_text = re.sub(r"\[\[EJECUTAR:.*?\]\]", "", reply_text).strip()
+        if coincidencia:
+            comando_tipo = coincidencia.group(1).upper()
+            comando_valor = coincidencia.group(2).strip()
+            # Limpia la etiqueta de la respuesta hablada
+            reply_text = re.sub(patron_etiquetas, "", reply_text, flags=re.IGNORECASE).strip()
 
         # 3. APRENDIZAJE AUTOMÁTICO
         patron_recordar = r"\[\[RECORDAR:\s*(.*?)\s*=\s*(.*?)\s*\]\]"
-        coincidencias_memoria = re.findall(patron_recordar, reply_text)
-        for clave, valor in coincidencias_memoria:
-            if clave in ["nombre_usuario", "trato"]:
-                perfil_usuario[clave] = valor
-            else:
-                perfil_usuario["gustos_y_datos"][clave] = valor
-            guardar_perfil(perfil_usuario)
+        coincidencias_memoria = re.findall(patron_recordar, reply_text, re.IGNORECASE)
+        if coincidencias_memoria:
+            perfil_actual = cargar_perfil()
+            for clave, valor in coincidencias_memoria:
+                clave_clean = clave.strip().lower()
+                valor_clean = valor.strip()
+                if clave_clean in ["nombre_usuario", "trato"]:
+                    perfil_actual[clave_clean] = valor_clean
+                else:
+                    perfil_actual["gustos_y_datos"][clave_clean] = valor_clean
+            guardar_perfil(perfil_actual)
+            reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text).strip()
-
-        # 4. REGISTRAR ORDEN Y VOZ
-        orden_pc_pendiente = {
-            "tipo": comando_tipo,
-            "valor": comando_valor,
-            "hablar": reply_text
-        }
+        # 4. AÑADIR A LA COLA DE LA LAPTOP
+        if comando_tipo or reply_text:
+            cola_ordenes_pc.append({
+                "tipo": comando_tipo,
+                "valor": comando_valor,
+                "hablar": reply_text
+            })
 
         # 5. MEMORIA CONVERSACIONAL
         HISTORIAL.append({"role": "user", "content": user_message})
@@ -228,9 +220,12 @@ def esp32_status():
 
 @app.route('/pc/comando', methods=['GET'])
 def pc_comando():
-    global orden_pc_pendiente
-    data = orden_pc_pendiente or {}
-    orden_pc_pendiente = None  
+    """Entrega los comandos en orden estricto de llegada"""
+    global cola_ordenes_pc
+    if cola_ordenes_pc:
+        data = cola_ordenes_pc.pop(0) # Extrae la orden más antigua de la cola
+    else:
+        data = {}
     return jsonify(data)
 
 @app.route('/status', methods=['GET'])
