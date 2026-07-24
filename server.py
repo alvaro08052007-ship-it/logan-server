@@ -14,14 +14,13 @@ CORS(app)
 # ESTADOS GLOBALES Y MEMORIA
 # ==============================================================================
 estado_rele = "OFF"
-orden_pc_pendiente = None  # Guarda la orden que leerá tu laptop
+orden_pc_pendiente = None  # Objeto con la orden y el texto a hablar
 
 PERFIL_FILE = "perfil_usuario.json"
-HISTORIAL = []       # Memoria a corto plazo (charla activa)
-MAX_HISTORIAL = 10   # Mantiene los últimos 10 mensajes
+HISTORIAL = []       
+MAX_HISTORIAL = 10   
 
 def cargar_perfil():
-    """Carga los gustos y personalidad aprendidos por Logan."""
     if os.path.exists(PERFIL_FILE):
         try:
             with open(PERFIL_FILE, "r", encoding="utf-8") as f:
@@ -35,7 +34,6 @@ def cargar_perfil():
     }
 
 def guardar_perfil(perfil):
-    """Guarda en disco los nuevos aprendizajes."""
     try:
         with open(PERFIL_FILE, "w", encoding="utf-8") as f:
             json.dump(perfil, f, ensure_ascii=False, indent=2)
@@ -45,12 +43,11 @@ def guardar_perfil(perfil):
 perfil_usuario = cargar_perfil()
 
 def construir_prompt_sistema():
-    """Inyecta la personalidad aprendida y las reglas de control."""
     perfil_str = json.dumps(perfil_usuario, ensure_ascii=False, indent=2)
     
     return f"""
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante, con un toque sutil de ingenio y gran capacidad conversacional.
-Hablas de forma fluida, cercana, natural y concisa.
+Hablas de forma fluida, cercana, natural y concisa (máximo 2 a 3 oraciones para ser ágil al hablar).
 
 INSTRUCCIÓN DE IDENTIDAD (STRICT):
 - Tu nombre es Logan. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan.
@@ -59,21 +56,25 @@ PERFIL Y MEMORIA DEL USUARIO:
 {perfil_str}
 - IMPORTANTE: Adapta tu tono, trato y vocabulario según lo aprendido en el perfil anterior.
 
-REGLAS DE CONTROL DOMÓTICO:
-- Para encender la luz/foco: incluye EXACTAMENTE [[LUZ:ON]] en tu respuesta.
-- Para apagar la luz/foco: incluye EXACTAMENTE [[LUZ:OFF]] en tu respuesta.
+REGLAS DE CONTROL DOMÓTICO (ESP32):
+- Encender luz: [[LUZ:ON]]
+- Apagar luz: [[LUZ:OFF]]
 
-REGLAS DE CONTROL DE LAPTOP / SPOTIFY:
-- Si el usuario te pide abrir un programa o poner música (ej. 'abre Spotify', 'pon música', 'abre Chrome', 'abre la calculadora'):
-  Debes incluir EXACTAMENTE [[EJECUTAR: nombre_app]] en tu respuesta.
-  Ejemplos válidos:
-  - "pon spotify" / "pon musica" -> [[EJECUTAR: spotify]]
-  - "abre el navegador" -> [[EJECUTAR: chrome]]
-  - "abre la calculadora" -> [[EJECUTAR: calc]]
+REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
+- Abrir aplicaciones: [[EJECUTAR: nombre_app]] (ej. [[EJECUTAR: chrome]], [[EJECUTAR: calc]], [[EJECUTAR: whatsapp]])
+- Reproducir música/videos: [[REPRODUCIR: nombre_cancion_o_artista]] (ej. [[REPRODUCIR: Queen Bohemian Rhapsody]])
+- Control de Volumen / Multimedia:
+  - Subir volumen: [[VOLUMEN: SUBIR]]
+  - Bajar volumen: [[VOLUMEN: BAJAR]]
+  - Silenciar: [[VOLUMEN: MUTE]]
+  - Pausar o reanudar música: [[VOLUMEN: PAUSA]]
+- Control de Sistema:
+  - Bloquear pantalla: [[SISTEMA: BLOQUEAR]]
+  - Tomar captura de pantalla: [[SISTEMA: CAPTURA]]
+  - Apagar laptop: [[SISTEMA: APAGAR]]
 
 REGLA DE APRENDIZAJE AUTOMÁTICO:
-- Si el usuario te da datos personales o te pide cambiar cómo le hablas, incluye [[RECORDAR: clave = valor]].
-  Ejemplo: "Me llamo Carlos" -> [[RECORDAR: nombre_usuario = Carlos]]
+- Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
 """
 
 MODELOS_GROQ = [
@@ -149,13 +150,38 @@ def chat():
             estado_rele = "OFF"
             reply_text = reply_text.replace("[[LUZ:OFF]]", "").strip()
 
-        # 2. CONTROL DE LAPTOP
-        patron_ejecutar = r"\[\[EJECUTAR:\s*(.*?)\s*\]\]"
-        coincidencias_pc = re.findall(patron_ejecutar, reply_text)
-        if coincidencias_pc:
-            orden_pc_pendiente = coincidencias_pc[0].lower().strip()
-            print(f"💻 ORDEN PARA LAPTOP REGISTRADA: {orden_pc_pendiente}")
-            reply_text = re.sub(r"\[\[EJECUTAR:.*?\]\]", "", reply_text).strip()
+        # Objeto de orden para la Laptop
+        comando_tipo = None
+        comando_valor = None
+
+        # 2. CONTROL DE LAPTOP (EXTENDIDO)
+        if "[[REPRODUCIR:" in reply_text:
+            match = re.search(r"\[\[REPRODUCIR:\s*(.*?)\s*\]\]", reply_text)
+            if match:
+                comando_tipo = "REPRODUCIR"
+                comando_valor = match.group(1)
+                reply_text = re.sub(r"\[\[REPRODUCIR:.*?\]\]", "", reply_text).strip()
+
+        elif "[[VOLUMEN:" in reply_text:
+            match = re.search(r"\[\[VOLUMEN:\s*(.*?)\s*\]\]", reply_text)
+            if match:
+                comando_tipo = "VOLUMEN"
+                comando_valor = match.group(1).upper()
+                reply_text = re.sub(r"\[\[VOLUMEN:.*?\]\]", "", reply_text).strip()
+
+        elif "[[SISTEMA:" in reply_text:
+            match = re.search(r"\[\[SISTEMA:\s*(.*?)\s*\]\]", reply_text)
+            if match:
+                comando_tipo = "SISTEMA"
+                comando_valor = match.group(1).upper()
+                reply_text = re.sub(r"\[\[SISTEMA:.*?\]\]", "", reply_text).strip()
+
+        elif "[[EJECUTAR:" in reply_text:
+            match = re.search(r"\[\[EJECUTAR:\s*(.*?)\s*\]\]", reply_text)
+            if match:
+                comando_tipo = "EJECUTAR"
+                comando_valor = match.group(1).lower().strip()
+                reply_text = re.sub(r"\[\[EJECUTAR:.*?\]\]", "", reply_text).strip()
 
         # 3. APRENDIZAJE AUTOMÁTICO
         patron_recordar = r"\[\[RECORDAR:\s*(.*?)\s*=\s*(.*?)\s*\]\]"
@@ -166,11 +192,17 @@ def chat():
             else:
                 perfil_usuario["gustos_y_datos"][clave] = valor
             guardar_perfil(perfil_usuario)
-            print(f"🧠 LOGAN APRENDIÓ: {clave} = {valor}")
 
         reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text).strip()
 
-        # 4. MEMORIA CONVERSACIONAL
+        # 4. REGISTRAR ORDEN Y VOZ PARA LA LAPTOP
+        orden_pc_pendiente = {
+            "tipo": comando_tipo,
+            "valor": comando_valor,
+            "hablar": reply_text  # Envía la respuesta completa para que la laptop la hable en voz alta
+        }
+
+        # 5. MEMORIA CONVERSACIONAL
         HISTORIAL.append({"role": "user", "content": user_message})
         HISTORIAL.append({"role": "assistant", "content": reply_text})
         if len(HISTORIAL) > MAX_HISTORIAL * 2:
@@ -185,16 +217,14 @@ def chat():
 
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
-    """Ruta que lee el microcontrolador ESP32"""
     return jsonify({"relay": estado_rele})
 
 @app.route('/pc/comando', methods=['GET'])
 def pc_comando():
-    """Ruta que lee el programa de tu Laptop"""
     global orden_pc_pendiente
-    cmd = orden_pc_pendiente
-    orden_pc_pendiente = None  # Borra la orden tras leerla para no repetirla
-    return jsonify({"comando": cmd})
+    data = orden_pc_pendiente or {}
+    orden_pc_pendiente = None  # Se borra tras leerse
+    return jsonify(data)
 
 @app.route('/status', methods=['GET'])
 def status():
