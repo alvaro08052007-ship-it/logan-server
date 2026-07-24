@@ -14,7 +14,7 @@ CORS(app)
 # ESTADOS GLOBALES Y MEMORIA
 # ==============================================================================
 estado_rele = "OFF"
-orden_pc_pendiente = None  # Objeto con la orden y el texto a hablar
+orden_pc_pendiente = None  
 
 PERFIL_FILE = "perfil_usuario.json"
 HISTORIAL = []       
@@ -61,13 +61,15 @@ REGLAS DE CONTROL DOMÓTICO (ESP32):
 - Apagar luz: [[LUZ:OFF]]
 
 REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
-- Abrir aplicaciones: [[EJECUTAR: nombre_app]] (ej. [[EJECUTAR: chrome]], [[EJECUTAR: calc]], [[EJECUTAR: whatsapp]])
-- Reproducir música/videos: [[REPRODUCIR: nombre_cancion_o_artista]] (ej. [[REPRODUCIR: Queen Bohemian Rhapsody]])
-- Control de Volumen / Multimedia:
+- Reproducir música en SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
+  (ej. "pon Bohemian Rhapsody", "reproduce Bad Bunny" -> [[REPRODUCIR: Queen Bohemian Rhapsody]])
+- Pausar / Reanudar música: [[VOLUMEN: PAUSA]]
+  (ej. "pausa la música", "pon pausa", "sigue la música", "despausa" -> [[VOLUMEN: PAUSA]])
+- Abrir aplicaciones: [[EJECUTAR: nombre_app]]
+- Control de Volumen:
   - Subir volumen: [[VOLUMEN: SUBIR]]
   - Bajar volumen: [[VOLUMEN: BAJAR]]
   - Silenciar: [[VOLUMEN: MUTE]]
-  - Pausar o reanudar música: [[VOLUMEN: PAUSA]]
 - Control de Sistema:
   - Bloquear pantalla: [[SISTEMA: BLOQUEAR]]
   - Tomar captura de pantalla: [[SISTEMA: CAPTURA]]
@@ -150,11 +152,10 @@ def chat():
             estado_rele = "OFF"
             reply_text = reply_text.replace("[[LUZ:OFF]]", "").strip()
 
-        # Objeto de orden para la Laptop
         comando_tipo = None
         comando_valor = None
 
-        # 2. CONTROL DE LAPTOP (EXTENDIDO)
+        # 2. CONTROL DE LAPTOP
         if "[[REPRODUCIR:" in reply_text:
             match = re.search(r"\[\[REPRODUCIR:\s*(.*?)\s*\]\]", reply_text)
             if match:
@@ -195,11 +196,11 @@ def chat():
 
         reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text).strip()
 
-        # 4. REGISTRAR ORDEN Y VOZ PARA LA LAPTOP
+        # 4. REGISTRAR ORDEN Y VOZ
         orden_pc_pendiente = {
             "tipo": comando_tipo,
             "valor": comando_valor,
-            "hablar": reply_text  # Envía la respuesta completa para que la laptop la hable en voz alta
+            "hablar": reply_text
         }
 
         # 5. MEMORIA CONVERSACIONAL
@@ -223,7 +224,7 @@ def esp32_status():
 def pc_comando():
     global orden_pc_pendiente
     data = orden_pc_pendiente or {}
-    orden_pc_pendiente = None  # Se borra tras leerse
+    orden_pc_pendiente = None  
     return jsonify(data)
 
 @app.route('/status', methods=['GET'])
