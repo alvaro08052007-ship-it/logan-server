@@ -239,3 +239,8 @@ def status():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
+@app.route('/perfil', methods=['GET'])
+def ver_perfil():
+    """Permite ver la memoria de Logan guardada en MongoDB"""
+    return jsonify(cargar_perfil())
