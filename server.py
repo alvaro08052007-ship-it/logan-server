@@ -11,7 +11,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ==============================================================================
-# CONEXIÓN A BASE DE DATOS (MONGODB) CON TIMEOUT BLINDADO
+# CONEXIÓN A BASE DE DATOS (MONGODB) BLINDADA CONTRA ERRORES SSL/TLS
 # ==============================================================================
 MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 perfil_col = None
@@ -20,12 +20,17 @@ if MONGO_URI:
     try:
         import pymongo
         import certifi
-        # Agregamos serverSelectionTimeoutMS=2500 para que máximo espere 2.5s y no congele el servidor
+        
+        # Conexión configurada con TLS y certificados de certifi
         client = pymongo.MongoClient(
-            MONGO_URI, 
+            MONGO_URI,
+            tls=True,
             tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=2500
+            serverSelectionTimeoutMS=5000
         )
+        
+        # Probar la conexión con un ping antes de continuar
+        client.admin.command('ping')
         db = client["logan_db"]
         perfil_col = db["perfil"]
         print("✅ Conectado exitosamente a MongoDB Atlas")
