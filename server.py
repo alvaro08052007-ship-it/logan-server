@@ -61,19 +61,18 @@ REGLAS DE CONTROL DOMÓTICO (ESP32):
 - Apagar luz: [[LUZ:OFF]]
 
 REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
+- ALARMAS / TEMPORIZADORES / RECORDATORIOS (NUEVO):
+  Si el usuario pide que le avises en cierto tiempo (ej. "avísame en 1 minuto", "pon alarma de 30 segundos"):
+  Debes incluir EXACTAMENTE [[ALARMA: segundos | mensaje_que_dira_logan_al_cumplirse_el_tiempo]]
+  Ejemplos:
+  - "avísame en 1 minuto que saque el café" -> [[ALARMA: 60 | ¡Oye! Ya pasó un minuto, recuerda sacar el café.]]
+  - "pon un temporizador de 10 segundos" -> [[ALARMA: 10 | ¡Tiempo cumplido! Pasaron los 10 segundos.]]
+
 - Reproducir música en SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
-  (ej. "pon Bohemian Rhapsody", "reproduce Bad Bunny" -> [[REPRODUCIR: Queen Bohemian Rhapsody]])
 - Pausar / Reanudar música: [[VOLUMEN: PAUSA]]
-  (ej. "pausa la música", "pon pausa", "sigue la música", "despausa" -> [[VOLUMEN: PAUSA]])
 - Abrir aplicaciones: [[EJECUTAR: nombre_app]]
-- Control de Volumen:
-  - Subir volumen: [[VOLUMEN: SUBIR]]
-  - Bajar volumen: [[VOLUMEN: BAJAR]]
-  - Silenciar: [[VOLUMEN: MUTE]]
-- Control de Sistema:
-  - Bloquear pantalla: [[SISTEMA: BLOQUEAR]]
-  - Tomar captura de pantalla: [[SISTEMA: CAPTURA]]
-  - Apagar laptop: [[SISTEMA: APAGAR]]
+- Control de Volumen: [[VOLUMEN: SUBIR]], [[VOLUMEN: BAJAR]], [[VOLUMEN: MUTE]]
+- Control de Sistema: [[SISTEMA: BLOQUEAR]], [[SISTEMA: CAPTURA]], [[SISTEMA: APAGAR]]
 
 REGLA DE APRENDIZAJE AUTOMÁTICO:
 - Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
@@ -155,8 +154,15 @@ def chat():
         comando_tipo = None
         comando_valor = None
 
-        # 2. CONTROL DE LAPTOP
-        if "[[REPRODUCIR:" in reply_text:
+        # 2. CONTROL DE LAPTOP Y ALARMAS
+        if "[[ALARMA:" in reply_text:
+            match = re.search(r"\[\[ALARMA:\s*(.*?)\s*\]\]", reply_text)
+            if match:
+                comando_tipo = "ALARMA"
+                comando_valor = match.group(1)
+                reply_text = re.sub(r"\[\[ALARMA:.*?\]\]", "", reply_text).strip()
+
+        elif "[[REPRODUCIR:" in reply_text:
             match = re.search(r"\[\[REPRODUCIR:\s*(.*?)\s*\]\]", reply_text)
             if match:
                 comando_tipo = "REPRODUCIR"
