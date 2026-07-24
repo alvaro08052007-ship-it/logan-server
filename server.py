@@ -21,23 +21,24 @@ if MONGO_URI:
         import pymongo
         import certifi
         
-        # Conexión configurada con TLS y certificados de certifi
+        # Conexión configurada con TLS explícito y certificados de certifi
         client = pymongo.MongoClient(
             MONGO_URI,
             tls=True,
             tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=5000
+            serverSelectionTimeoutMS=3000
         )
         
-        # Probar la conexión con un ping antes de continuar
+        # Probar la conexión con un ping para confirmar la autenticación SSL
         client.admin.command('ping')
         db = client["logan_db"]
         perfil_col = db["perfil"]
         print("✅ Conectado exitosamente a MongoDB Atlas")
     except Exception as e:
-        print("⚠️ Error conectando a MongoDB Atlas:", e)
+        print("⚠️ Error o timeout conectando a MongoDB Atlas:", e)
+
 estado_rele = "OFF"
-cola_ordenes_pc = []  # COLA DE MENSAJES (Sustituye la variable única para no perder órdenes)
+cola_ordenes_pc = []  # Cola FIFO para no perder comandos enviados a la PC
 HISTORIAL = []       
 MAX_HISTORIAL = 10   
 
@@ -52,7 +53,8 @@ def cargar_perfil():
             print("⚠️ Error leyendo perfil de DB:", e)
             
     return {
-        "nombre_usuario": "Amigo",
+        "nombre_usuario": "Álvaro",
+        "creador": "Álvaro",
         "trato": "informal, cercano y natural",
         "gustos_y_datos": {}
     }
@@ -75,10 +77,11 @@ def construir_prompt_sistema():
     
     return f"""
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante y muy eficiente.
+Tu único creador, desarrollador y jefe es Álvaro. Si te preguntan quién te creó o quién eres, responde con orgullo que fuiste creado por Álvaro.
 Hablas de forma fluida, cercana, natural y concisa (máximo 2 oraciones breves).
 
-INSTRUCCIÓN DE IDENTIDAD (STRICT):
-- Tu nombre es Logan. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan.
+INSTRUCCIÓN DE IDENTIDAD Y CREADOR (STRICT):
+- Tu nombre es Logan. Tu creador es Álvaro. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan y tu creador es Álvaro.
 
 PERFIL Y MEMORIA DEL USUARIO:
 {perfil_str}
@@ -88,9 +91,9 @@ REGLAS DE CONTROL DOMÓTICO (ESP32):
 - Apagar luz: [[LUZ:OFF]]
 
 REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
-- PAUSAR O REANUDAR MÚSICA/MULTIMEDIA (Súper importante):
+- PAUSAR O REANUDAR MÚSICA/MULTIMEDIA:
   Si el usuario dice 'pausa', 'pon pausa', 'despausa', 'continúa', 'reproduce', 'sigue la música':
-  Debes responder e incluir OBLIGATORIAMENTE [[VOLUMEN: PAUSA]].
+  Debes incluir OBLIGATORIAMENTE [[VOLUMEN: PAUSA]].
 - REPRODUCIR EN SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
 - TEMPORIZADORES/ALARMAS: [[ALARMA: segundos | mensaje]]
 - ABRIR APLICACIONES: [[EJECUTAR: nombre_app]]
@@ -177,17 +180,17 @@ def chat():
         comando_tipo = None
         comando_valor = None
 
-        # 2. EXTRACCIÓN FLEXIBLE DE COMANDOS (Insensible a mayúsculas/minúsculas)
+        # 2. EXTRACCIÓN FLEXIBLE DE COMANDOS PARA LA LAPTOP
         patron_etiquetas = r"\[\[(ALARMA|REPRODUCIR|VOLUMEN|SISTEMA|EJECUTAR):\s*(.*?)\s*\]\]"
         coincidencia = re.search(patron_etiquetas, reply_text, re.IGNORECASE)
 
         if coincidencia:
             comando_tipo = coincidencia.group(1).upper()
             comando_valor = coincidencia.group(2).strip()
-            # Limpia la etiqueta de la respuesta hablada
+            # Limpia la etiqueta para que Logan no la diga en voz alta
             reply_text = re.sub(patron_etiquetas, "", reply_text, flags=re.IGNORECASE).strip()
 
-        # 3. APRENDIZAJE AUTOMÁTICO
+        # 3. APRENDIZAJE AUTOMÁTICO EN MONGODB
         patron_recordar = r"\[\[RECORDAR:\s*(.*?)\s*=\s*(.*?)\s*\]\]"
         coincidencias_memoria = re.findall(patron_recordar, reply_text, re.IGNORECASE)
         if coincidencias_memoria:
@@ -195,14 +198,14 @@ def chat():
             for clave, valor in coincidencias_memoria:
                 clave_clean = clave.strip().lower()
                 valor_clean = valor.strip()
-                if clave_clean in ["nombre_usuario", "trato"]:
+                if clave_clean in ["nombre_usuario", "trato", "creador"]:
                     perfil_actual[clave_clean] = valor_clean
                 else:
                     perfil_actual["gustos_y_datos"][clave_clean] = valor_clean
             guardar_perfil(perfil_actual)
             reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        # 4. AÑADIR A LA COLA DE LA LAPTOP
+        # 4. ENCOLA EL COMANDO PARA LA LAPTOP
         if comando_tipo or reply_text:
             cola_ordenes_pc.append({
                 "tipo": comando_tipo,
@@ -210,7 +213,7 @@ def chat():
                 "hablar": reply_text
             })
 
-        # 5. MEMORIA CONVERSACIONAL
+        # 5. HISTORIAL DE CONVERSACIÓN
         HISTORIAL.append({"role": "user", "content": user_message})
         HISTORIAL.append({"role": "assistant", "content": reply_text})
         if len(HISTORIAL) > MAX_HISTORIAL * 2:
@@ -229,13 +232,18 @@ def esp32_status():
 
 @app.route('/pc/comando', methods=['GET'])
 def pc_comando():
-    """Entrega los comandos en orden estricto de llegada"""
+    """Entrega las órdenes a la laptop en orden exacto de llegada"""
     global cola_ordenes_pc
     if cola_ordenes_pc:
-        data = cola_ordenes_pc.pop(0) # Extrae la orden más antigua de la cola
+        data = cola_ordenes_pc.pop(0)
     else:
         data = {}
     return jsonify(data)
+
+@app.route('/perfil', methods=['GET'])
+def ver_perfil():
+    """Ruta de diagnóstico para inspeccionar la memoria de Logan"""
+    return jsonify(cargar_perfil())
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -244,8 +252,3 @@ def status():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
-@app.route('/perfil', methods=['GET'])
-def ver_perfil():
-    """Permite ver la memoria de Logan guardada en MongoDB"""
-    return jsonify(cargar_perfil())
