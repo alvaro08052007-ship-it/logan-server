@@ -11,7 +11,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ==============================================================================
-# CONEXIÓN A BASE DE DATOS (MONGODB) BLINDADA CONTRA ERRORES SSL/TLS
+# CONEXIÓN A BASE DE DATOS (MONGODB)
 # ==============================================================================
 MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 perfil_col = None
@@ -20,25 +20,46 @@ if MONGO_URI:
     try:
         import pymongo
         import certifi
-        
-        # Conexión configurada con TLS explícito y certificados de certifi
         client = pymongo.MongoClient(
             MONGO_URI,
             tls=True,
             tlsCAFile=certifi.where(),
             serverSelectionTimeoutMS=3000
         )
-        
-        # Probar la conexión con un ping para confirmar la autenticación SSL
         client.admin.command('ping')
         db = client["logan_db"]
         perfil_col = db["perfil"]
         print("✅ Conectado exitosamente a MongoDB Atlas")
     except Exception as e:
-        print("⚠️ Error o timeout conectando a MongoDB Atlas:", e)
+        print("⚠️ Error conectando a MongoDB Atlas:", e)
 
-estado_rele = "OFF"
-cola_ordenes_pc = []  # Cola FIFO para no perder comandos enviados a la PC
+# ESTADO GLOBAL DE LA TIRA LED WS2812B
+estado_luz = {
+    "state": "OFF",
+    "r": 255,
+    "g": 255,
+    "b": 255,
+    "brightness": 180
+}
+
+MAPA_COLORES = {
+    "ROJO": (255, 0, 0),
+    "VERDE": (0, 255, 0),
+    "AZUL": (0, 0, 255),
+    "BLANCO": (255, 255, 255),
+    "CALIDO": (255, 160, 40),
+    "CÁLIDO": (255, 160, 40),
+    "AMARILLO": (255, 220, 0),
+    "MORADO": (180, 0, 255),
+    "PÚRPURA": (180, 0, 255),
+    "ROSADO": (255, 20, 147),
+    "MAGENTA": (255, 0, 255),
+    "CIAN": (0, 255, 255),
+    "NARANJA": (255, 60, 0),
+    "TURQUESA": (0, 245, 205)
+}
+
+cola_ordenes_pc = []
 HISTORIAL = []       
 MAX_HISTORIAL = 10   
 
@@ -77,23 +98,24 @@ def construir_prompt_sistema():
     
     return f"""
 Eres Logan, un asistente de hogar con inteligencia artificial avanzado, empático, brillante y muy eficiente.
-Tu único creador, desarrollador y jefe es Álvaro. Si te preguntan quién te creó o quién eres, responde con orgullo que fuiste creado por Álvaro.
+Tu único creador, desarrollador y jefe es Álvaro. Si te preguntan quién te creó o quién eres, responde que fuiste creado por Álvaro.
 Hablas de forma fluida, cercana, natural y concisa (máximo 2 oraciones breves).
 
-INSTRUCCIÓN DE IDENTIDAD Y CREADOR (STRICT):
-- Tu nombre es Logan. Tu creador es Álvaro. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan y tu creador es Álvaro.
+INSTRUCCIÓN DE IDENTIDAD (STRICT):
+- Tu nombre es Logan. Tu creador es Álvaro. Jamás menciones que eres Llama, Groq, Meta, OpenAI, Gemini ni ningún otro motor. Tu única identidad es Logan.
 
 PERFIL Y MEMORIA DEL USUARIO:
 {perfil_str}
 
-REGLAS DE CONTROL DOMÓTICO (ESP32):
+REGLAS DE CONTROL DOMÓTICO (TIRA LED WS2812B):
 - Encender luz: [[LUZ:ON]]
 - Apagar luz: [[LUZ:OFF]]
+- Cambiar color: [[LUZ:COLOR: NOMBRE_COLOR]] 
+  (Opciones válidas: ROJO, VERDE, AZUL, BLANCO, CALIDO, AMARILLO, MORADO, ROSADO, CIAN, NARANJA, TURQUESA)
+- Cambiar brillo: [[LUZ:BRILLO: NÚMERO_DEL_10_AL_100]] (Ejemplo: [[LUZ:BRILLO: 50]])
 
 REGLAS DE CONTROL DE LAPTOP (OBLIGATORIAS):
-- PAUSAR O REANUDAR MÚSICA/MULTIMEDIA:
-  Si el usuario dice 'pausa', 'pon pausa', 'despausa', 'continúa', 'reproduce', 'sigue la música':
-  Debes incluir OBLIGATORIAMENTE [[VOLUMEN: PAUSA]].
+- PAUSAR O REANUDAR MÚSICA/MULTIMEDIA: [[VOLUMEN: PAUSA]]
 - REPRODUCIR EN SPOTIFY: [[REPRODUCIR: nombre_cancion_o_artista]]
 - TEMPORIZADORES/ALARMAS: [[ALARMA: segundos | mensaje]]
 - ABRIR APLICACIONES: [[EJECUTAR: nombre_app]]
@@ -153,44 +175,63 @@ def consultar_groq(api_key, user_message):
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    global estado_rele, HISTORIAL, cola_ordenes_pc
+    global estado_luz, HISTORIAL, cola_ordenes_pc
     
     api_key = os.environ.get("GROQ_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
 
     if not api_key:
-        return jsonify({'reply': 'Falta configurar GROQ_API_KEY en Render.', 'estado_rele': estado_rele}), 500
+        return jsonify({'reply': 'Falta configurar GROQ_API_KEY en Render.', 'estado_luz': estado_luz}), 500
 
     data = request.get_json() or {}
     user_message = data.get('message', '')
 
     if not user_message:
-        return jsonify({'reply': 'No logré escucharte bien.', 'estado_rele': estado_rele}), 400
+        return jsonify({'reply': 'No logré escucharte bien.', 'estado_luz': estado_luz}), 400
 
     try:
         reply_text = consultar_groq(api_key, user_message)
 
-        # 1. CONTROL DOMÓTICO (ESP32)
+        # 1. PARSEO DE LUZ DOMÓTICA (WS2812B)
         if "[[LUZ:ON]]" in reply_text.upper():
-            estado_rele = "ON"
+            estado_luz["state"] = "ON"
             reply_text = re.sub(r"\[\[LUZ:ON\]\]", "", reply_text, flags=re.IGNORECASE).strip()
+
         elif "[[LUZ:OFF]]" in reply_text.upper():
-            estado_rele = "OFF"
+            estado_luz["state"] = "OFF"
             reply_text = re.sub(r"\[\[LUZ:OFF\]\]", "", reply_text, flags=re.IGNORECASE).strip()
+
+        match_color = re.search(r"\[\[LUZ:COLOR:\s*(.*?)\s*\]\]", reply_text, re.IGNORECASE)
+        if match_color:
+            color_nombre = match_color.group(1).upper().strip()
+            if color_nombre in MAPA_COLORES:
+                r, g, b = MAPA_COLORES[color_nombre]
+                estado_luz["r"] = r
+                estado_luz["g"] = g
+                estado_luz["b"] = b
+                estado_luz["state"] = "ON"
+            reply_text = re.sub(r"\[\[LUZ:COLOR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
+
+        match_brillo = re.search(r"\[\[LUZ:BRILLO:\s*(\d+)\s*\]\]", reply_text, re.IGNORECASE)
+        if match_brillo:
+            porcentaje = int(match_brillo.group(1))
+            porcentaje = max(10, min(100, porcentaje))
+            estado_luz["brightness"] = int((porcentaje / 100.0) * 255)
+            estado_luz["state"] = "ON"
+            reply_text = re.sub(r"\[\[LUZ:BRILLO:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
         comando_tipo = None
         comando_valor = None
 
-        # 2. EXTRACCIÓN FLEXIBLE DE COMANDOS PARA LA LAPTOP
+        # 2. PARSEO DE LAPTOP
         patron_etiquetas = r"\[\[(ALARMA|REPRODUCIR|VOLUMEN|SISTEMA|EJECUTAR):\s*(.*?)\s*\]\]"
         coincidencia = re.search(patron_etiquetas, reply_text, re.IGNORECASE)
 
         if coincidencia:
             comando_tipo = coincidencia.group(1).upper()
             comando_valor = coincidencia.group(2).strip()
-            # Limpia la etiqueta para que Logan no la diga en voz alta
             reply_text = re.sub(patron_etiquetas, "", reply_text, flags=re.IGNORECASE).strip()
 
-        # 3. APRENDIZAJE AUTOMÁTICO EN MONGODB
+        # 3. APRENDIZAJE AUTOMÁTICO
         patron_recordar = r"\[\[RECORDAR:\s*(.*?)\s*=\s*(.*?)\s*\]\]"
         coincidencias_memoria = re.findall(patron_recordar, reply_text, re.IGNORECASE)
         if coincidencias_memoria:
@@ -205,7 +246,7 @@ def chat():
             guardar_perfil(perfil_actual)
             reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        # 4. ENCOLA EL COMANDO PARA LA LAPTOP
+        # 4. AÑADIR A LA COLA DE LA LAPTOP
         if comando_tipo or reply_text:
             cola_ordenes_pc.append({
                 "tipo": comando_tipo,
@@ -219,20 +260,20 @@ def chat():
         if len(HISTORIAL) > MAX_HISTORIAL * 2:
             HISTORIAL = HISTORIAL[-MAX_HISTORIAL * 2:]
 
-        return jsonify({'reply': reply_text, 'estado_rele': estado_rele})
+        return jsonify({'reply': reply_text, 'estado_luz': estado_luz})
 
     except Exception as e:
         print("❌ ERROR GENERAL:", str(e))
         traceback.print_exc()
-        return jsonify({'reply': f"Detalle técnico: {str(e)[:150]}", 'estado_rele': estado_rele}), 500
+        return jsonify({'reply': f"Detalle técnico: {str(e)[:150]}", 'estado_luz': estado_luz}), 500
 
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
-    return jsonify({"relay": estado_rele})
+    """Ruta que lee el ESP32 para saber cómo encender la tira LED"""
+    return jsonify(estado_luz)
 
 @app.route('/pc/comando', methods=['GET'])
 def pc_comando():
-    """Entrega las órdenes a la laptop en orden exacto de llegada"""
     global cola_ordenes_pc
     if cola_ordenes_pc:
         data = cola_ordenes_pc.pop(0)
@@ -242,12 +283,11 @@ def pc_comando():
 
 @app.route('/perfil', methods=['GET'])
 def ver_perfil():
-    """Ruta de diagnóstico para inspeccionar la memoria de Logan"""
     return jsonify(cargar_perfil())
 
 @app.route('/status', methods=['GET'])
 def status():
-    return f"<h1>Logan Server Activo</h1><p>Relé: <b>{estado_rele}</b></p>"
+    return f"<h1>Logan Server Activo</h1><p>Estado Luz: <b>{json.dumps(estado_luz)}</b></p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
