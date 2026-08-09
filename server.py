@@ -302,17 +302,7 @@ def ver_perfil():
 def status():
     return f"<h1>Logan Server Activo</h1><p>Estado Luz: <b>{json.dumps(estado_luz)}</b></p>"
 
-@app.route('/alerta_puerta', methods=['POST', 'GET'])
-def alerta_puerta():
-    global cola_ordenes_pc
-    # Añade el aviso a la cola para que la laptop lo hable de inmediato
-    cola_ordenes_pc.append({
-        "tipo": None,
-        "valor": None,
-        "hablar": "Álvaro, alguien se está acercando a la puerta."
-    })
-    print("🚨 ALERTA: Presencia detectada en la puerta.")
-    return jsonify({"status": "ok", "message": "Alerta registrada"})
+
     
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
