@@ -42,6 +42,8 @@ estado_luz = {
     "brightness": 180
 }
 
+cola_ordenes_pc = []
+
 MAPA_COLORES = {
     "ROJO": (255, 0, 0),
     "VERDE": (0, 255, 0),
