@@ -281,6 +281,17 @@ def pc_comando():
         data = {}
     return jsonify(data)
 
+@app.route('/alerta_puerta', methods=['POST', 'GET'])
+def alerta_puerta():
+    global cola_ordenes_pc
+    cola_ordenes_pc.append({
+        "tipo": None,
+        "valor": None,
+        "hablar": "Álvaro, alguien se está acercando a la puerta."
+    })
+    print("🚨 ALERTA: Presencia detectada en la puerta.")
+    return jsonify({"status": "ok", "message": "Alerta registrada"})
+    
 @app.route('/perfil', methods=['GET'])
 def ver_perfil():
     return jsonify(cargar_perfil())
