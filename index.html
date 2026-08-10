@@ -3,370 +3,294 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Logan AI — Home Assistant</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>LOGAN AI - Control Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #0b0e14;
-            --card-bg: rgba(22, 27, 34, 0.8);
-            --user-msg: #1f6feb;
-            --logan-msg: #21262d;
-            --accent-cyan: #00f2fe;
-            --text-main: #e6edf3;
-            --text-muted: #8b949e;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            --bg-color: #0b0d17;
+            --card-bg: rgba(22, 27, 46, 0.75);
+            --accent-color: #00f0ff;
+            --accent-pink: #ff007f;
+            --text-color: #e0e6ed;
         }
 
         body {
-            background-color: var(--bg-color);
-            background-image: radial-gradient(circle at 50% 0%, #1a233a 0%, #0b0e14 75%);
-            color: var(--text-main);
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            font-family: 'Roboto', sans-serif;
+            background: radial-gradient(circle at center, #1a1f38 0%, #080a12 100%);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
             min-height: 100vh;
-            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            font-family: 'Orbitron', sans-serif;
+            color: var(--accent-color);
+            text-shadow: 0 0 15px rgba(0, 240, 255, 0.6);
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+            text-align: center;
         }
 
         .container {
             width: 100%;
-            max-width: 480px;
-            height: 92vh;
+            max-width: 800px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .container { grid-template-columns: 1fr; }
+        }
+
+        .card {
             background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 24px;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.6);
-            overflow: hidden;
-        }
-
-        /* HEADER */
-        .header {
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            border-radius: 15px;
             padding: 20px;
-            text-align: center;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            background: rgba(13, 17, 23, 0.5);
-            position: relative;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            backdrop-filter: blur(8px);
         }
 
-        .avatar-container {
-            position: relative;
-            width: 75px;
-            height: 75px;
-            margin: 0 auto 10px;
+        .card h2 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            color: #fff;
+            margin-top: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 10px;
         }
 
-        .avatar {
+        .light-preview {
             width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #00f2fe, #4facfe);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
+            height: 60px;
+            border-radius: 10px;
+            margin: 15px 0;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
             transition: all 0.3s ease;
-            box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+            background-color: #111;
         }
 
-        .avatar.speaking {
-            animation: pulse-cyan 1.5s infinite;
+        .preset-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
         }
 
-        .avatar.listening {
-            animation: pulse-red 1s infinite;
-            background: linear-gradient(135deg, #ff4b1f, #ff9068);
-        }
-
-        @keyframes pulse-cyan {
-            0% { box-shadow: 0 0 0 0 rgba(0, 242, 254, 0.7); }
-            70% { box-shadow: 0 0 0 20px rgba(0, 242, 254, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(0, 242, 254, 0); }
-        }
-
-        @keyframes pulse-red {
-            0% { box-shadow: 0 0 0 0 rgba(255, 75, 31, 0.8); }
-            70% { box-shadow: 0 0 0 20px rgba(255, 75, 31, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(255, 75, 31, 0); }
-        }
-
-        h1 { font-size: 20px; font-weight: 600; letter-spacing: 0.5px; }
-        
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 12px;
-            color: var(--text-muted);
-            margin-top: 4px;
-            background: rgba(255,255,255,0.05);
-            padding: 4px 12px;
-            border-radius: 20px;
-        }
-
-        .dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: var(--text-muted);
-        }
-
-        .dot.on { background-color: #2ea043; box-shadow: 0 0 8px #2ea043; }
-        .dot.off { background-color: #da3633; }
-
-        /* CHAT AREA */
-        .chat-container {
-            flex: 1;
-            padding: 15px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            scroll-behavior: smooth;
-        }
-
-        .message {
-            max-width: 82%;
-            padding: 12px 16px;
-            border-radius: 18px;
-            font-size: 14.5px;
-            line-height: 1.4;
-            word-wrap: break-word;
-            animation: fadeIn 0.25s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message.user {
-            align-self: flex-end;
-            background: var(--user-msg);
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-
-        .message.logan {
-            align-self: flex-start;
-            background: var(--logan-msg);
-            color: var(--text-main);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-bottom-left-radius: 4px;
-        }
-
-        /* CONTROLS */
-        .controls {
-            padding: 15px;
-            background: rgba(13, 17, 23, 0.8);
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .mic-btn {
-            width: 64px;
-            height: 64px;
-            border-radius: 50%;
-            border: none;
-            background: linear-gradient(135deg, #238636, #2ea043);
-            color: white;
-            font-size: 24px;
+        button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--accent-color);
+            color: #fff;
+            padding: 10px;
+            border-radius: 8px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 15px rgba(35, 134, 54, 0.4);
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            font-weight: bold;
+            transition: 0.2s;
         }
 
-        .mic-btn:active, .mic-btn.listening {
-            background: linear-gradient(135deg, #da3633, #f85149);
-            transform: scale(1.08);
-            box-shadow: 0 4px 20px rgba(218, 54, 51, 0.6);
+        button:hover {
+            background: var(--accent-color);
+            color: #000;
+            box-shadow: 0 0 15px var(--accent-color);
+        }
+
+        .chat-box {
+            grid-column: span 2;
+        }
+
+        @media (max-width: 600px) {
+            .chat-box { grid-column: span 1; }
+        }
+
+        #chat-history {
+            height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.95rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         .input-group {
-            width: 100%;
             display: flex;
-            gap: 8px;
+            gap: 10px;
         }
 
         input[type="text"] {
             flex: 1;
-            background: #0d1117;
-            border: 1px solid #30363d;
-            border-radius: 12px;
-            padding: 12px 15px;
-            color: white;
-            font-size: 14px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 12px;
+            border-radius: 8px;
+            color: #fff;
             outline: none;
         }
 
         input[type="text"]:focus {
-            border-color: var(--accent-cyan);
+            border-color: var(--accent-color);
         }
 
-        .send-btn {
-            background: #1f6feb;
-            border: none;
-            border-radius: 12px;
-            padding: 0 18px;
-            color: white;
-            cursor: pointer;
-            font-size: 16px;
+        .mic-btn {
+            background: var(--accent-pink);
+            border-color: var(--accent-pink);
+        }
+
+        .mic-btn:hover {
+            background: #ff3399;
+            box-shadow: 0 0 15px var(--accent-pink);
+        }
+
+        .status-tag {
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
 
+    <h1>🤖 LOGAN AI - HUB</h1>
+
     <div class="container">
-        <!-- HEADER -->
-        <div class="header">
-            <div class="avatar-container">
-                <div id="avatar" class="avatar">🐺</div>
+        <!-- CONTROL DE ILUMINACIÓN -->
+        <div class="card">
+            <h2>💡 Tira LED WS2812B</h2>
+            <div id="lightView" class="light-preview"></div>
+            <p>Estado: <span id="lightState" class="status-tag">Conectando...</span></p>
+            
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <label>Mezcla Personalizada:</label>
+                <input type="color" id="colorPicker" value="#ffffff" onchange="cambiarColorPicker(this.value)" style="cursor:pointer; background:none; border:none; width:40px; height:40px;">
             </div>
-            <h1>Logan AI</h1>
-            <div class="status-badge">
-                <span>Luz Habitación:</span>
-                <span id="light-dot" class="dot"></span>
+
+            <div class="preset-buttons">
+                <button onclick="enviarComando('Pon luces estilo cyberpunk')">Cyberpunk</button>
+                <button onclick="enviarComando('Pon luces color verde menta')">Menta</button>
+                <button onclick="enviarComando('Pon luces de atardecer')">Atardecer</button>
+                <button onclick="enviarComando('Pon modo matrix')">Matrix</button>
+                <button onclick="enviarComando('Encender luz')">Encender</button>
+                <button onclick="enviarComando('Apagar luz')">Apagar</button>
             </div>
         </div>
 
-        <!-- CHAT HISTORIAL -->
-        <div id="chat-container" class="chat-container">
-            <div class="message logan">
-                👋 ¡Hola! Soy Logan. ¿En qué te puedo ayudar hoy?
+        <!-- MONITOR DEL SISTEMA -->
+        <div class="card">
+            <h2>🚨 Estado Domótico</h2>
+            <p>🚪 Sensor Puerta: <b id="doorStatus" style="color: #00ff66;">Sin alertas</b></p>
+            <p>🌐 Servidor Backend: <b id="serverStatus" style="color: var(--accent-color);">Verificando...</b></p>
+            
+            <div style="margin-top: 25px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <button onclick="enviarComando('Pausa la música')">⏯️ Play/Pausa</button>
+                <button onclick="enviarComando('Sube el volumen')">🔊 Volumen +</button>
             </div>
         </div>
 
-        <!-- CONTROLES -->
-        <div class="controls">
-            <button id="mic-btn" class="mic-btn" onclick="toggleVoice()">
-                <i class="fa-solid fa-microphone"></i>
-            </button>
-
+        <!-- CHAT CON LOGAN -->
+        <div class="card chat-box">
+            <h2>💬 Conversación en Vivo</h2>
+            <div id="chat-history">
+                <p><i>🤖 Logan: Sistema inicializado. ¿Qué necesitas, Álvaro?</i></p>
+            </div>
             <div class="input-group">
-                <input type="text" id="text-input" placeholder="Escribe un mensaje a Logan..." onkeypress="handleKey(event)">
-                <button class="send-btn" onclick="enviarTexto()">
-                    <i class="fa-solid fa-paper-plane"></i>
-                </button>
+                <input type="text" id="userInput" placeholder="Escribe o pulsa el micrófono para hablar..." onkeypress="if(event.key==='Enter') enviarTexto()">
+                <button onclick="enviarTexto()">Enviar</button>
+                <button class="mic-btn" onclick="iniciarReconocimientoVoz()" title="Hablar por micrófono">🎙️</button>
             </div>
         </div>
     </div>
 
     <script>
-        const chatContainer = document.getElementById('chat-container');
-        const lightDot = document.getElementById('light-dot');
-        const micBtn = document.getElementById('mic-btn');
-        const avatar = document.getElementById('avatar');
+        // URL DEL BACKEND EN RENDER
+        const BACKEND_URL = "https://logan-server-ba38.onrender.com";
 
-        // Reconocimiento de Voz
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        let recognition = null;
+        function actualizarEstado() {
+            fetch(`${BACKEND_URL}/esp32/status`)
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('serverStatus').innerText = "ONLINE";
+                    document.getElementById('serverStatus').style.color = "#00ff66";
 
-        if (SpeechRecognition) {
-            recognition = new SpeechRecognition();
-            recognition.lang = 'es-ES';
-
-            recognition.onstart = () => {
-                micBtn.classList.add('listening');
-                avatar.classList.add('listening');
-            };
-
-            recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript;
-                agregarMensaje(transcript, 'user');
-                procesarComando(transcript);
-            };
-
-            recognition.onend = () => {
-                micBtn.classList.remove('listening');
-                avatar.classList.remove('listening');
-            };
-        }
-
-        function toggleVoice() {
-            if (recognition) {
-                try { recognition.start(); } catch(e) { recognition.stop(); }
-            } else {
-                alert("Tu navegador no soporta reconocimiento de voz directo.");
-            }
-        }
-
-        function handleKey(e) {
-            if (e.key === 'Enter') enviarTexto();
+                    const view = document.getElementById('lightView');
+                    const stateTxt = document.getElementById('lightState');
+                    if(data.state === 'ON') {
+                        view.style.backgroundColor = `rgb(${data.r}, ${data.g}, ${data.b})`;
+                        view.style.boxShadow = `0 0 25px rgb(${data.r}, ${data.g}, ${data.b})`;
+                        stateTxt.innerText = `ENCENDIDO (${data.r}, ${data.g}, ${data.b})`;
+                        stateTxt.style.color = '#00ff66';
+                    } else {
+                        view.style.backgroundColor = '#111';
+                        view.style.boxShadow = 'none';
+                        stateTxt.innerText = 'APAGADO';
+                        stateTxt.style.color = '#ff3366';
+                    }
+                })
+                .catch(err => {
+                    document.getElementById('serverStatus').innerText = "DESCONECTADO / INICIANDO";
+                    document.getElementById('serverStatus').style.color = "#ffaa00";
+                });
         }
 
         function enviarTexto() {
-            const input = document.getElementById('text-input');
-            const texto = input.value.trim();
-            if (texto !== "") {
-                agregarMensaje(texto, 'user');
-                procesarComando(texto);
-                input.value = "";
+            const input = document.getElementById('userInput');
+            const txt = input.value.trim();
+            if(!txt) return;
+            enviarComando(txt);
+            input.value = '';
+        }
+
+        function enviarComando(texto) {
+            const history = document.getElementById('chat-history');
+            history.innerHTML += `<p><b>Tú:</b> ${texto}</p>`;
+            history.scrollTop = history.scrollHeight;
+
+            fetch(`${BACKEND_URL}/chat`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: texto})
+            })
+            .then(r => r.json())
+            .then(data => {
+                history.innerHTML += `<p><b>🤖 Logan:</b> ${data.reply}</p>`;
+                history.scrollTop = history.scrollHeight;
+                actualizarEstado();
+            })
+            .catch(err => {
+                history.innerHTML += `<p style="color:#ff3366;"><b>System Error:</b> No se pudo comunicar con Logan en Render.</p>`;
+            });
+        }
+
+        function cambiarColorPicker(hex) {
+            const r = parseInt(hex.substr(1,2), 16);
+            const g = parseInt(hex.substr(3,2), 16);
+            const b = parseInt(hex.substr(5,2), 16);
+            enviarComando(`Pon la luz en color R:${r} G:${g} B:${b}`);
+        }
+
+        function iniciarReconocimientoVoz() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                alert('Tu navegador no soporta reconocimiento de voz. Prueba desde Google Chrome o Safari.');
+                return;
             }
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'es-ES';
+            recognition.start();
+
+            recognition.onresult = function(event) {
+                const mensaje = event.results[0][0].transcript;
+                enviarComando(mensaje);
+            };
         }
 
-        function agregarMensaje(texto, remitente) {
-            const msgDiv = document.createElement('div');
-            msgDiv.classList.add('message', remitente);
-            msgDiv.innerText = texto;
-            chatContainer.appendChild(msgDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        // Sintetizador de Voz (Hablar)
-        function hablar(texto) {
-            if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(texto);
-                utterance.lang = 'es-ES';
-                utterance.rate = 1.0;
-
-                utterance.onstart = () => avatar.classList.add('speaking');
-                utterance.onend = () => avatar.classList.remove('speaking');
-
-                window.speechSynthesis.speak(utterance);
-            }
-        }
-
-        async function procesarComando(texto) {
-            try {
-                const response = await fetch('https://logan-server-ba38.onrender.com/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: texto })
-                });
-
-                const data = await response.json();
-                
-                // Mostrar respuesta en el chat
-                agregarMensaje(data.reply, 'logan');
-
-                // Hablar
-                hablar(data.reply);
-
-                // Actualizar indicador de luz
-                if (data.estado_rele === "ON") {
-                    lightDot.className = "dot on";
-                } else if (data.estado_rele === "OFF") {
-                    lightDot.className = "dot off";
-                }
-            } catch (err) {
-                agregarMensaje("Error al conectar con Logan en la nube.", 'logan');
-            }
-        }
+        setInterval(actualizarEstado, 3000);
+        actualizarEstado();
     </script>
 </body>
 </html>
