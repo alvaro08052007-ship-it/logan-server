@@ -207,8 +207,24 @@
     </div>
 
     <script>
-        // URL DEL BACKEND EN RENDER
         const BACKEND_URL = "https://logan-server-ba38.onrender.com";
+
+        // ==============================================================================
+        // FUNCIÓN PARA QUE LOGAN HABLE EN VOZ ALTA (TEXT-TO-SPEECH)
+        // ==============================================================================
+        function hablar(texto) {
+            if ('speechSynthesis' in window) {
+                // Cancela cualquier audio anterior para que no se empalmen las voces
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(texto);
+                utterance.lang = 'es-ES'; // Idioma español
+                utterance.rate = 1.0;     // Velocidad de voz (1.0 = normal)
+                utterance.pitch = 1.0;    // Tono de voz
+
+                window.speechSynthesis.speak(utterance);
+            }
+        }
 
         function actualizarEstado() {
             fetch(`${BACKEND_URL}/esp32/status`)
@@ -259,6 +275,12 @@
             .then(data => {
                 history.innerHTML += `<p><b>🤖 Logan:</b> ${data.reply}</p>`;
                 history.scrollTop = history.scrollHeight;
+
+                // 🔊 ¡HACEMOS QUE LOGAN HABLE EN VOZ ALTA!
+                if(data.reply) {
+                    hablar(data.reply);
+                }
+
                 actualizarEstado();
             })
             .catch(err => {
