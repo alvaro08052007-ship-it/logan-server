@@ -144,7 +144,6 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 MODELOS_GROQ = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768"
 ]
 
 def consultar_groq(api_key, user_message):
