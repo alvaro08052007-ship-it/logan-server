@@ -142,11 +142,37 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 - Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
 """
 
-# Modelos en orden de respaldo
-MODELOS_GROQ = [
+# ==============================================================================
+# GESTIÓN DINÁMICA DE MODELOS DE GROQ
+# ==============================================================================
+MODELOS_PREFERIDOS = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
     "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile"
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it"
 ]
+
+def obtener_modelos_disponibles(api_key):
+    """Consulta directamente a Groq qué modelos están activos en tu cuenta"""
+    url = "https://api.groq.com/openai/v1/models"
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+        'User-Agent': 'LoganAI/1.0'
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            modelos = [m['id'] for m in res_data.get('data', [])]
+            print("📋 Modelos activos detectados en tu cuenta Groq:", modelos)
+            return modelos
+    except Exception as e:
+        print(f"⚠️ No se pudo consultar la lista dinámica de modelos: {e}")
+        return []
 
 def consultar_groq(api_key, user_message):
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -156,13 +182,32 @@ def consultar_groq(api_key, user_message):
         'User-Agent': 'LoganAI/1.0'
     }
 
+    # 1. Obtener los modelos activos en tiempo real desde Groq
+    modelos_activos = obtener_modelos_disponibles(api_key)
+    
+    # 2. Filtrar los modelos a probar ordenados por prioridad
+    modelos_a_probar = []
+    
+    for m in MODELOS_PREFERIDOS:
+        if m in modelos_activos:
+            modelos_a_probar.append(m)
+            
+    for m in modelos_activos:
+        if m not in modelos_a_probar and "whisper" not in m and "guard" not in m:
+            modelos_a_probar.append(m)
+            
+    if not modelos_a_probar:
+        modelos_a_probar = MODELOS_PREFERIDOS
+
+    print("🚀 Probando modelos en este orden:", modelos_a_probar)
+
     messages_payload = [{"role": "system", "content": construir_prompt_sistema()}]
     for msg in HISTORIAL:
         messages_payload.append(msg)
     messages_payload.append({"role": "user", "content": user_message})
 
     ultimo_error = ""
-    for modelo in MODELOS_GROQ:
+    for modelo in modelos_a_probar:
         payload = {
             "model": modelo,
             "messages": messages_payload,
@@ -175,25 +220,25 @@ def consultar_groq(api_key, user_message):
                 data=json.dumps(payload).encode('utf-8'),
                 headers=headers
             )
-            # Timeout de 12 segundos por intento
             with urllib.request.urlopen(req, timeout=12) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
+            print(f"✅ Respuesta exitosa usando el modelo: {modelo}")
             return res_data['choices'][0]['message']['content']
 
         except urllib.error.HTTPError as e:
             try:
                 err_body = e.read().decode('utf-8')
-                ultimo_error = f"Error HTTP {e.code} ({modelo}): {err_body}"
+                ultimo_error = f"HTTP {e.code} ({modelo}): {err_body}"
             except Exception:
-                ultimo_error = f"Error HTTP {e.code} ({modelo}): {str(e)}"
-            print(f"⚠️ Error en modelo {modelo}, probando siguiente respaldo... DETALLE: {ultimo_error}")
+                ultimo_error = f"HTTP {e.code} ({modelo}): {str(e)}"
+            print(f"⚠️ Falló {modelo}, probando el siguiente respaldo... Error: {ultimo_error}")
             continue
         except Exception as e:
             ultimo_error = f"Error en {modelo}: {str(e)}"
             print(f"⚠️ Error de red con {modelo}: {ultimo_error}")
             continue
 
-    raise Exception(f"No se pudo obtener respuesta de Groq. Último error: {ultimo_error}")
+    raise Exception(f"Ningún modelo respondió. Último error: {ultimo_error}")
 
 # ==============================================================================
 # PLANTILLA HTML PARA LA INTERFAZ WEB FUTURISTA (DASHBOARD)
@@ -483,12 +528,11 @@ def dashboard():
 def chat():
     global estado_luz, HISTORIAL, cola_ordenes_pc
     
-    # Obtener API key directamente de GROQ_API_KEY
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     if not api_key:
         return jsonify({
-            'reply': '⚠️ ERROR: Falta configurar la variable GROQ_API_KEY en las Environment Variables de Render.', 
+            'reply': '⚠️ ERROR: Falta configurar la variable GROQ_API_KEY en Render.', 
             'estado_luz': estado_luz
         }), 500
 
