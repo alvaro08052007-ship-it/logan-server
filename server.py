@@ -140,10 +140,11 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 - Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
 """
 
+# LISTA DE MODELOS OFICIALES ACTIVOS EN GROQ
 MODELOS_GROQ = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama3-70b-8192"
+    "mixtral-8x7b-32768"
 ]
 
 def consultar_groq(api_key, user_message):
