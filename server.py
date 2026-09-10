@@ -74,6 +74,8 @@ def cargar_perfil():
             doc = perfil_col.find_one({"_id": "usuario_principal"})
             if doc:
                 doc.pop("_id", None)
+                if "gustos_y_datos" not in doc or not isinstance(doc["gustos_y_datos"], dict):
+                    doc["gustos_y_datos"] = {}
                 return doc
         except Exception as e:
             print("⚠️ Error leyendo perfil de DB:", e)
@@ -140,9 +142,10 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 - Si el usuario te da datos personales o preferencias: [[RECORDAR: clave = valor]].
 """
 
-# LISTA DE MODELOS OFICIALES ACTIVOS EN GROQ
+# Modelos en orden de respaldo
 MODELOS_GROQ = [
-    "llama-3.1-8b-instant"
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile"
 ]
 
 def consultar_groq(api_key, user_message):
@@ -150,7 +153,7 @@ def consultar_groq(api_key, user_message):
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {api_key}',
-        'User-Agent': 'Mozilla/5.0'
+        'User-Agent': 'LoganAI/1.0'
     }
 
     messages_payload = [{"role": "system", "content": construir_prompt_sistema()}]
@@ -172,22 +175,25 @@ def consultar_groq(api_key, user_message):
                 data=json.dumps(payload).encode('utf-8'),
                 headers=headers
             )
-            with urllib.request.urlopen(req) as response:
+            # Timeout de 12 segundos por intento
+            with urllib.request.urlopen(req, timeout=12) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
             return res_data['choices'][0]['message']['content']
 
         except urllib.error.HTTPError as e:
             try:
                 err_body = e.read().decode('utf-8')
-                ultimo_error = f"HTTP {e.code}: {err_body}"
+                ultimo_error = f"Error HTTP {e.code} ({modelo}): {err_body}"
             except Exception:
-                ultimo_error = f"HTTP {e.code}: {str(e)}"
+                ultimo_error = f"Error HTTP {e.code} ({modelo}): {str(e)}"
+            print(f"⚠️ Error en modelo {modelo}, probando siguiente respaldo... DETALLE: {ultimo_error}")
             continue
         except Exception as e:
-            ultimo_error = str(e)
+            ultimo_error = f"Error en {modelo}: {str(e)}"
+            print(f"⚠️ Error de red con {modelo}: {ultimo_error}")
             continue
 
-    raise Exception(ultimo_error)
+    raise Exception(f"No se pudo obtener respuesta de Groq. Último error: {ultimo_error}")
 
 # ==============================================================================
 # PLANTILLA HTML PARA LA INTERFAZ WEB FUTURISTA (DASHBOARD)
@@ -471,28 +477,31 @@ HTML_DASHBOARD = """
 
 @app.route('/')
 def dashboard():
-    """Ruta principal con la nueva interfaz de usuario"""
     return render_template_string(HTML_DASHBOARD)
 
 @app.route('/chat', methods=['POST'])
 def chat():
     global estado_luz, HISTORIAL, cola_ordenes_pc
     
-    api_key = os.environ.get("GROQ_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
+    # Obtener API key directamente de GROQ_API_KEY
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     if not api_key:
-        return jsonify({'reply': 'Falta configurar GROQ_API_KEY en Render.', 'estado_luz': estado_luz}), 500
+        return jsonify({
+            'reply': '⚠️ ERROR: Falta configurar la variable GROQ_API_KEY en las Environment Variables de Render.', 
+            'estado_luz': estado_luz
+        }), 500
 
     data = request.get_json() or {}
-    user_message = data.get('message', '')
+    user_message = data.get('message', '').strip()
 
     if not user_message:
-        return jsonify({'reply': 'No logré escucharte bien.', 'estado_luz': estado_luz}), 400
+        return jsonify({'reply': 'No logré escucharte bien o la solicitud estuvo vacía.', 'estado_luz': estado_luz}), 400
 
     try:
         reply_text = consultar_groq(api_key, user_message)
 
-        # 1. PARSEO DE LUZ MEZCLA RGB DE 16.7 MILLONES DE COLORES
+        # 1. PARSEO DE LUZ MEZCLA RGB
         match_rgb = re.search(r"\[\[LUZ:RGB:\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]\]", reply_text, re.IGNORECASE)
         if match_rgb:
             estado_luz["r"] = max(0, min(255, int(match_rgb.group(1))))
@@ -501,7 +510,6 @@ def chat():
             estado_luz["state"] = "ON"
             reply_text = re.sub(r"\[\[LUZ:RGB:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        # PARSEO LUZ COMPATIBILIDAD ANTERIOR / ENCENDER / APAGAR
         if "[[LUZ:ON]]" in reply_text.upper():
             estado_luz["state"] = "ON"
             reply_text = re.sub(r"\[\[LUZ:ON\]\]", "", reply_text, flags=re.IGNORECASE).strip()
@@ -545,6 +553,9 @@ def chat():
         coincidencias_memoria = re.findall(patron_recordar, reply_text, re.IGNORECASE)
         if coincidencias_memoria:
             perfil_actual = cargar_perfil()
+            if "gustos_y_datos" not in perfil_actual or not isinstance(perfil_actual["gustos_y_datos"], dict):
+                perfil_actual["gustos_y_datos"] = {}
+
             for clave, valor in coincidencias_memoria:
                 clave_clean = clave.strip().lower()
                 valor_clean = valor.strip()
@@ -555,7 +566,6 @@ def chat():
             guardar_perfil(perfil_actual)
             reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        # Limpiar espacios dobles sobrantes tras eliminar etiquetas
         reply_text = re.sub(r'\s+', ' ', reply_text).strip()
 
         # 4. AÑADIR A LA COLA DE LA LAPTOP
@@ -577,7 +587,7 @@ def chat():
     except Exception as e:
         print("❌ ERROR GENERAL:", str(e))
         traceback.print_exc()
-        return jsonify({'reply': f"Detalle técnico: {str(e)}", 'estado_luz': estado_luz}), 500
+        return jsonify({'reply': f"Detalle del problema con Groq: {str(e)}", 'estado_luz': estado_luz}), 500
 
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
