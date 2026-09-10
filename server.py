@@ -142,7 +142,10 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 
 # LISTA DE MODELOS OFICIALES ACTIVOS EN GROQ
 MODELOS_GROQ = [
-    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it"
 ]
 
 def consultar_groq(api_key, user_message):
@@ -577,7 +580,7 @@ def chat():
     except Exception as e:
         print("❌ ERROR GENERAL:", str(e))
         traceback.print_exc()
-        return jsonify({'reply': f"Detalle técnico: {str(e)[:150]}", 'estado_luz': estado_luz}), 500
+        return jsonify({'reply': f"Detalle técnico: {str(e)}", 'estado_luz': estado_luz}), 500
 
 @app.route('/esp32/status', methods=['GET'])
 def esp32_status():
