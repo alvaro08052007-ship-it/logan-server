@@ -177,6 +177,13 @@ def consultar_groq(api_key, user_message):
                 res_data = json.loads(response.read().decode('utf-8'))
             return res_data['choices'][0]['message']['content']
 
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode('utf-8')
+                ultimo_error = f"HTTP {e.code}: {err_body}"
+            except Exception:
+                ultimo_error = f"HTTP {e.code}: {str(e)}"
+            continue
         except Exception as e:
             ultimo_error = str(e)
             continue
@@ -495,12 +502,12 @@ def chat():
             estado_luz["state"] = "ON"
             reply_text = re.sub(r"\[\[LUZ:RGB:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        # PARSEO LUZ COMPATIBILIDAD ANTERIOR
+        # PARSEO LUZ COMPATIBILIDAD ANTERIOR / ENCENDER / APAGAR
         if "[[LUZ:ON]]" in reply_text.upper():
             estado_luz["state"] = "ON"
             reply_text = re.sub(r"\[\[LUZ:ON\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
-        elif "[[LUZ:OFF]]" in reply_text.upper():
+        if "[[LUZ:OFF]]" in reply_text.upper():
             estado_luz["state"] = "OFF"
             reply_text = re.sub(r"\[\[LUZ:OFF\]\]", "", reply_text, flags=re.IGNORECASE).strip()
 
@@ -548,6 +555,9 @@ def chat():
                     perfil_actual["gustos_y_datos"][clave_clean] = valor_clean
             guardar_perfil(perfil_actual)
             reply_text = re.sub(r"\[\[RECORDAR:.*?\]\]", "", reply_text, flags=re.IGNORECASE).strip()
+
+        # Limpiar espacios dobles sobrantes tras eliminar etiquetas
+        reply_text = re.sub(r'\s+', ' ', reply_text).strip()
 
         # 4. AÑADIR A LA COLA DE LA LAPTOP
         if comando_tipo or reply_text:
