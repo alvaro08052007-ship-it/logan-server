@@ -143,7 +143,6 @@ REGLA DE APRENDIZAJE AUTOMÁTICO:
 # LISTA DE MODELOS OFICIALES ACTIVOS EN GROQ
 MODELOS_GROQ = [
     "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
 ]
 
 def consultar_groq(api_key, user_message):
