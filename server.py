@@ -75,8 +75,8 @@ MODELOS_PREFERIDOS = [m.strip() for m in _env("LOGAN_MODELOS").split(",") if m.s
 NO_CHAT = ("whisper", "guard", "tts", "playai", "orpheus", "embed", "safeguard", "moderation")
 
 APPS_PERMITIDAS_DEFECTO = (
-    "spotify,chrome,navegador,calculadora,notepad,bloc de notas,explorador,"
-    "vscode,discord,whatsapp,terminal,word,excel"
+    "spotify,youtube,netflix,chrome,navegador,whatsapp,calc,calculadora,"
+    "notepad,bloc de notas,explorador,discord,terminal"
 )
 
 app = Flask(__name__)
@@ -193,6 +193,7 @@ def cabeceras(resp):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:"
         )
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
     else:
         resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -422,6 +423,8 @@ def construir_prompt_sistema():
     luz_str = (f"encendida, RGB({luz['r']}, {luz['g']}, {luz['b']}), brillo {luz['brillo_pct']}%"
                if luz["state"] == "ON" else "apagada")
     nombre = perfil.get("nombre_usuario", "Álvaro")
+    permitidas = _apps_permitidas()
+    apps_txt = "cualquiera" if "*" in permitidas else ", ".join(sorted(permitidas))
 
     return f"""Eres Logan, el asistente de hogar con inteligencia artificial de {nombre}: brillante, empático y servicial.
 Tu único creador, desarrollador y jefe es Álvaro. Si te preguntan quién te creó, responde con orgullo que fuiste creado por Álvaro.
@@ -455,7 +458,7 @@ Laptop:
 - Pausar o reanudar música: [[VOLUMEN: PAUSA]]
 - Reproducir en Spotify: [[REPRODUCIR: canción o artista]]
 - Temporizador (en segundos): [[ALARMA: segundos | mensaje]]
-- Abrir una aplicación: [[EJECUTAR: nombre_app]]
+- Abrir una aplicación: [[EJECUTAR: nombre_app]] (apps disponibles: {apps_txt})
 - Volumen: [[VOLUMEN: SUBIR]], [[VOLUMEN: BAJAR]], [[VOLUMEN: MUTE]]
 - Sistema: [[SISTEMA: BLOQUEAR]], [[SISTEMA: CAPTURA]], [[SISTEMA: APAGAR]] (apagar solo si lo piden de forma explícita; el servidor pedirá confirmación).
 
