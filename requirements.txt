@@ -1,6 +1,5 @@
-flask
-flask-cors
-gunicorn
-pymongo
+flask>=2.3
+flask-cors>=4.0
+pymongo>=4.6
 certifi
-dnspython
+gunicorn>=21.2
