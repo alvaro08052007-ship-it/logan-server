@@ -170,13 +170,15 @@ def requiere_token(f):
         if not LOGAN_TOKEN:
             return jsonify(error="El servidor no tiene LOGAN_TOKEN configurado.",
                            reply="El servidor no tiene configurado LOGAN_TOKEN."), 503
+        # Una clave correcta siempre pasa. El bloqueo solo frena a quien falla la clave,
+        # así un dispositivo mal configurado de tu casa no deja fuera a los demás.
+        if hmac.compare_digest(_token_recibido().encode("utf-8"), LOGAN_TOKEN.encode("utf-8")):
+            return f(*args, **kwargs)
         ip = ip_cliente()
-        if _contar(("fallo", ip), 300) >= 10:
+        if _contar(("fallo", ip), 300) >= 30:
             return jsonify(error="Demasiados intentos fallidos. Espera unos minutos."), 429
-        if not hmac.compare_digest(_token_recibido().encode("utf-8"), LOGAN_TOKEN.encode("utf-8")):
-            _anotar(("fallo", ip))
-            return jsonify(error="No autorizado."), 401
-        return f(*args, **kwargs)
+        _anotar(("fallo", ip))
+        return jsonify(error="No autorizado."), 401
     return envoltura
 
 
