@@ -337,11 +337,19 @@ def registrar_evento(tipo, cm=None):
 # reinicia, los ojos quedan apagados (falla cerrado) y la cámara se cierra sola.
 OJOS = {"activo": False, "hasta": 0.0}
 VISTA = {"texto": "", "ts": 0.0}
+PREVIEW = {"b64": "", "ts": 0.0, "visto": 0.0}   # último cuadro para la "pantalla" del dashboard
 
 
 def ojos_activos():
     with LOCK:
         return bool(OJOS["activo"] and time.time() < OJOS["hasta"])
+
+
+def ojos_emitiendo():
+    """True solo si los ojos están pedidos Y la laptop de verdad está mandando cuadros."""
+    with LOCK:
+        ahora = time.time()
+        return bool(OJOS["activo"] and ahora < OJOS["hasta"] and ahora - PREVIEW["ts"] < 25)
 
 
 def fijar_ojos(valor):
@@ -351,10 +359,10 @@ def fijar_ojos(valor):
         if estado.strip().upper() == "ON":
             minutos = _clamp(mins.strip() if mins.strip().isdigit() else 10, 1, 30)
             OJOS.update(activo=True, hasta=time.time() + minutos * 60)
-            VISTA.update(texto="", ts=0.0)
         else:
             OJOS.update(activo=False, hasta=0.0)
-            VISTA.update(texto="", ts=0.0)
+        VISTA.update(texto="", ts=0.0)
+        PREVIEW.update(b64="", ts=0.0, visto=0.0)
 
 
 # Cola de órdenes para la laptop
@@ -707,8 +715,12 @@ def _vista_texto():
         v = dict(VISTA)
     if not activo:
         return "Ojos apagados (cámara cerrada). Solo puedes mirar con la etiqueta VER, una foto puntual."
+    emitiendo = ahora - PREVIEW["ts"] < 25
+    if not emitiendo and not v["texto"]:
+        return ("Pediste abrir los ojos, pero la cámara de la laptop todavía no manda imágenes (puede estar "
+                "sin conexión). NO digas que ya ves ni inventes lo que hay frente a la cámara.")
     if not v["texto"]:
-        return "Ojos activos, esperando la primera imagen."
+        return "Ojos activos, la cámara ya manda imagen; esperando la primera descripción."
     return f"Ojos ACTIVOS. Lo último que viste (hace {_hace_texto(ahora - v['ts'])}): {v['texto']}"
 
 
@@ -792,8 +804,10 @@ Ojos (cámara en vivo):
   "mírame", "quédate mirando", etc. [[OJOS: OFF]] para cerrarlos. Solo si lo pidió claramente.
 - Con los ojos activos, en "TUS OJOS" verás lo último que captó la cámara. Úsalo para responder con
   naturalidad, sin decir "según la descripción". Si necesitas un vistazo más fresco, usa [[VER: ...]].
-- Al activarlos, avisa en una frase que la cámara quedó encendida. Si te preguntan qué ves y tus ojos
-  están apagados, dilo y ofrece activarlos; nunca inventes lo que hay frente a la cámara.
+- Al activarlos, di en una frase que estás abriendo la cámara; no afirmes que ya ves hasta que en
+  "TUS OJOS" aparezca una descripción. Si te preguntan qué ves y tus ojos están apagados o aún sin imagen,
+  dilo con honestidad; nunca inventes lo que hay frente a la cámara. Quien mira eres tú: no le devuelvas
+  a {nombre} la pregunta "¿qué ves?".
 
 Tareas independientes (actúas por tu cuenta a la hora indicada):
 - Una vez: [[TAREA: segundos | qué debes hacer o decir]]
@@ -1386,7 +1400,7 @@ def api_estado():
         memoria=perfil_col is not None,
         modelo=_ultimo_uso,
         vision=hay_vision(),
-        ojos=ojos_activos(),
+        ojos={"activo": ojos_activos(), "emitiendo": ojos_emitiendo()},
         cerebro={"grande": LLM_GRANDE_MODEL or None, "local": LLM_LOCAL_MODEL or None,
                  "groq": bool(GROQ_API_KEY)},
         tareas=n_tareas,
@@ -1562,6 +1576,39 @@ def api_vista():
     return jsonify(ok=True)
 
 
+@app.post("/api/camara")
+@requiere_token
+def api_camara_subir():
+    """El agente sube aquí el cuadro para la 'pantalla' del dashboard (sin pasar por el modelo de visión).
+    Responde si alguien está mirando la pantalla, para que el agente suba rápido solo cuando hace falta."""
+    if not ojos_activos():
+        return jsonify(error="Los ojos están apagados."), 409
+    if not limitar(("camara", ip_cliente()), 90, 60):
+        return jsonify(error="Demasiados cuadros seguidos."), 429
+    imagen = str((request.get_json(silent=True) or {}).get("imagen", ""))
+    if not imagen or len(imagen) > 1_500_000:
+        return jsonify(error="Falta la imagen o es demasiado grande."), 400
+    with LOCK:
+        PREVIEW.update(b64=imagen, ts=time.time())
+        mirando = time.time() - PREVIEW["visto"] < 10
+    return jsonify(ok=True, mirando=mirando)
+
+
+@app.get("/api/camara/imagen")
+@requiere_token
+def api_camara_ver():
+    """El dashboard pide el último cuadro. Si no hay uno más nuevo que 'desde', responde 204."""
+    if not ojos_activos():
+        return jsonify(activo=False), 409
+    desde = request.args.get("desde", 0, type=float)
+    with LOCK:
+        PREVIEW["visto"] = time.time()
+        b64, ts = PREVIEW["b64"], PREVIEW["ts"]
+    if not b64 or ts <= desde:
+        return "", 204
+    return jsonify(imagen=b64, ts=ts)
+
+
 @app.route("/alerta_puerta", methods=["GET", "POST"])
 @requiere_token
 def alerta_puerta():
@@ -1718,6 +1765,14 @@ button:disabled{opacity:.5;cursor:default}
 #puerta input{font:400 1rem var(--body);color:var(--text);background:var(--ink);border:1px solid var(--line);
   border-radius:10px;padding:11px 14px}
 #puertaError{color:var(--bad);min-height:1.3em}
+[hidden]{display:none!important}
+#camara{margin-bottom:16px}
+.camcab{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.camcab h2{margin:0 0 10px}
+#camTexto{font-size:.85rem;color:var(--muted)}
+.camcaja{background:#000;border:1px solid var(--line);border-radius:12px;overflow:hidden;aspect-ratio:16/9}
+.camcaja img{width:100%;height:100%;object-fit:contain;display:block}
+.camcaja img:not([src]){visibility:hidden}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -1775,6 +1830,10 @@ button:disabled{opacity:.5;cursor:default}
     </section>
 
     <section class="chat" aria-label="Conversación">
+      <div id="camara" hidden>
+        <div class="camcab"><h2>Cámara</h2><span id="camTexto">Esperando imagen de la laptop…</span></div>
+        <div class="camcaja"><img id="camImg" alt="Vista en vivo de la cámara de la laptop"></div>
+      </div>
       <h2>Conversación</h2>
       <div id="mensajes"></div>
       <div class="entrada">
@@ -1907,8 +1966,11 @@ function pintarEstado(e) {
   pastilla('#pPc', e.pc.conectado ? 'ok' : 'bad', e.pc.conectado ? 'Laptop conectada' : 'Laptop sin señal');
   if (e.puerta.alerta) pastilla('#pPuerta', 'warn', 'Movimiento hace ' + e.puerta.hace_s + ' s');
   else pastilla('#pPuerta', 'ok', 'Puerta tranquila');
-  if (e.ojos) pastilla('#pOjos', 'warn', 'Ojos abiertos (cámara encendida)');
+  const o = e.ojos || {};
+  if (o.activo && o.emitiendo) pastilla('#pOjos', 'warn', 'Ojos abiertos (cámara encendida)');
+  else if (o.activo) pastilla('#pOjos', 'bad', 'Ojos pedidos: la laptop no responde');
   else pastilla('#pOjos', '', 'Ojos cerrados');
+  camara(o);
 }
 
 let presetsListos = false;
@@ -2076,6 +2138,29 @@ if (!Reconocimiento) {
     rec.onerror = ev => aviso('No pude escucharte (' + ev.error + ').', true);
     rec.start();
   });
+}
+
+/* ---------- Pantalla de la cámara ---------- */
+let camTs = 0, camTimer = null;
+function camara(o) {
+  $('#camara').hidden = !o.activo;
+  if (!o.activo) {
+    clearInterval(camTimer); camTimer = null; camTs = 0;
+    $('#camImg').removeAttribute('src');
+    return;
+  }
+  $('#camTexto').textContent = o.emitiendo ? 'En vivo' : 'Esperando imagen de la laptop…';
+  if (!camTimer) camTimer = setInterval(traerCamara, 1500);
+}
+async function traerCamara() {
+  if (document.hidden) return;
+  try {
+    const r = await api('/api/camara/imagen?desde=' + camTs);
+    if (r.status === 200 && r.data.imagen) {
+      camTs = r.data.ts;
+      $('#camImg').src = 'data:image/jpeg;base64,' + r.data.imagen;
+    }
+  } catch (e) {}
 }
 
 /* ---------- Arranque ---------- */
