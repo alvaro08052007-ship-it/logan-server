@@ -719,6 +719,9 @@ def _vista_texto():
     if not emitiendo and not v["texto"]:
         return ("Pediste abrir los ojos, pero la cámara de la laptop todavía no manda imágenes (puede estar "
                 "sin conexión). NO digas que ya ves ni inventes lo que hay frente a la cámara.")
+    if not v["texto"] and VISION["error"] and ahora - VISION["ts"] < 180:
+        return ("Tu cámara SÍ manda imagen, pero tu módulo de visión está fallando "
+                f"({VISION['error'][:120]}). Díselo con franqueza a quien te escribe; no inventes lo que ves.")
     if not v["texto"]:
         return "Ojos activos, la cámara ya manda imagen; esperando la primera descripción."
     return f"Ojos ACTIVOS. Lo último que viste (hace {_hace_texto(ahora - v['ts'])}): {v['texto']}"
@@ -896,37 +899,128 @@ def hay_cerebro():
                 or (LLM_GRANDE_URL and LLM_GRANDE_MODEL))
 
 
-MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"   # modelo con visión de Groq
+LLM_VISION_MODEL = _env("LLM_VISION_MODEL")
+# Groq retira modelos con frecuencia: se prueban varios en orden y se recuerda el que funciona.
+MODELOS_VISION = [m for m in [LLM_VISION_MODEL, "qwen/qwen3.6-27b",
+                              "meta-llama/llama-4-scout-17b-16e-instruct",
+                              "meta-llama/llama-4-maverick-17b-128e-instruct"] if m]
+FALLOS_VISION = ("No pude", "No tengo forma", "No logré")
+PROMPT_VISTA = ("Describe en UNA frase corta lo que ves: personas, qué hacen y objetos relevantes. "
+                "Si no hay nadie, dilo.")
+VISION = {"modelo": None, "error": "", "ts": 0.0}   # último resultado de la visión (para diagnosticar)
+_vision_bueno = None
 
 
 def hay_vision():
     return bool(GROQ_API_KEY)
 
 
+def _modelos_vision():
+    base = list(dict.fromkeys(MODELOS_VISION))
+    activos = modelos_activos()
+    if activos:
+        filtrados = [m for m in base if m in activos or (LLM_VISION_MODEL and m == LLM_VISION_MODEL)]
+        extra = [m for m in activos if m not in base
+                 and any(x in m.lower() for x in ("scout", "maverick", "vision", "qwen3.6"))]
+        base = (filtrados + extra) or base
+    with LOCK:
+        if _vision_bueno in base:
+            base.remove(_vision_bueno)
+            base.insert(0, _vision_bueno)
+        ahora = time.time()
+        libres = [m for m in base if _cooldown.get("vision:" + m, 0) <= ahora]
+    return (libres or base)[:4]
+
+
 def preguntar_vision(imagen_b64, pregunta):
-    """Le muestra una foto (base64, jpeg) a un modelo con visión y devuelve su descripción.
-    Hoy solo funciona con Groq: ni el modelo local ni el 'grande' que configures tienen por qué
-    ver imágenes, así que esto es independiente del resto del enrutamiento de cerebros."""
+    """Le muestra una foto (base64, jpeg) a un modelo con visión de Groq y devuelve su descripción.
+    Prueba varios modelos (Groq los retira seguido) y guarda en VISION el último error para diagnosticar."""
+    global _vision_bueno
     if not GROQ_API_KEY:
+        VISION.update(error="falta GROQ_API_KEY en el servidor", ts=time.time())
         return ("No tengo forma de ver imágenes ahora mismo: esto necesita GROQ_API_KEY "
                 "configurada en el servidor.")
-    payload = {
-        "model": MODELO_VISION,
-        "max_tokens": 350,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": pregunta or "Describe brevemente y con naturalidad lo que ves."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagen_b64}"}},
-            ],
-        }],
-    }
-    try:
-        data = _groq("/chat/completions", payload, timeout=25)
-        return (data["choices"][0]["message"].get("content") or "").strip() or "No logré distinguir nada claro."
-    except Exception as e:
-        log.warning("⚠️ Falló la visión de Groq: %s", e)
-        return "No pude procesar la imagen ahora mismo."
+    contenido = [
+        {"type": "text", "text": pregunta or "Describe brevemente y con naturalidad lo que ves."},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagen_b64}"}},
+    ]
+    ultimo_error = "sin modelos de visión disponibles"
+    for modelo in _modelos_vision():
+        variantes = [{}]
+        if modelo.startswith("qwen/"):      # modelo que razona: sin razonamiento, o se come los tokens
+            variantes = [{"reasoning_effort": "none", "max_tokens": 700}, {"max_tokens": 900}]
+        for extra in variantes:
+            payload = {"model": modelo, "max_tokens": 350,
+                       "messages": [{"role": "user", "content": contenido}]}
+            payload.update(extra)
+            try:
+                data = _groq("/chat/completions", payload, timeout=25)
+                txt = (data["choices"][0]["message"].get("content") or "")
+                txt = re.sub(r"<think>.*?</think>", "", txt, flags=re.DOTALL).strip()
+                if not txt:
+                    raise ValueError("respuesta vacía")
+                with LOCK:
+                    _vision_bueno = modelo
+                VISION.update(modelo=modelo, error="", ts=time.time())
+                log.info("👁️ Visión OK con %s", modelo)
+                return txt
+            except urllib.error.HTTPError as e:
+                try:
+                    cuerpo = e.read().decode("utf-8")[:200]
+                except Exception:
+                    cuerpo = ""
+                ultimo_error = f"{modelo}: HTTP {e.code} {cuerpo}"
+                log.warning("⚠️ Visión falló: %s", ultimo_error)
+                if e.code in (401, 403):
+                    VISION.update(error=ultimo_error[:200], ts=time.time())
+                    return "No pude procesar la imagen: la clave de Groq no es válida."
+                if e.code == 400 and extra is variantes[0] and len(variantes) > 1:
+                    continue                # reintenta sin 'reasoning_effort'
+                if e.code == 429:
+                    try:
+                        espera = int(e.headers.get("Retry-After", "30"))
+                    except ValueError:
+                        espera = 30
+                elif e.code in (400, 404, 410, 422):
+                    espera = 600
+                else:
+                    espera = 20
+                with LOCK:
+                    _cooldown["vision:" + modelo] = time.time() + espera
+                break
+            except Exception as e:
+                ultimo_error = f"{modelo}: {e}"
+                log.warning("⚠️ Visión falló: %s", ultimo_error)
+                with LOCK:
+                    _cooldown["vision:" + modelo] = time.time() + 15
+                break
+    VISION.update(error=ultimo_error[:200], ts=time.time())
+    return "No pude procesar la imagen ahora mismo."
+
+
+def _describir_y_guardar(imagen_b64):
+    """Describe un cuadro y lo deja en VISTA (lo que Logan 've'). Devuelve True si hubo descripción."""
+    txt = preguntar_vision(imagen_b64, PROMPT_VISTA)
+    if txt.startswith(FALLOS_VISION):
+        return False                                # no pisar una buena descripción con un error
+    with LOCK:
+        if OJOS["activo"] and time.time() < OJOS["hasta"]:     # ¿se cerraron mientras tanto?
+            VISTA.update(texto=txt[:400], ts=time.time())
+    return True
+
+
+def refrescar_vista(max_edad=20):
+    """Antes de responderte, si los ojos están abiertos y la descripción falta o es vieja,
+    analiza el último cuadro de la pantalla en el momento. Así no dependes de que el agente suba nada."""
+    ahora = time.time()
+    with LOCK:
+        if not (OJOS["activo"] and ahora < OJOS["hasta"]):
+            return
+        b64, ts_prev = PREVIEW["b64"], PREVIEW["ts"]
+        fresca = bool(VISTA["texto"]) and ahora - VISTA["ts"] < max_edad
+    if fresca or not b64 or ahora - ts_prev > 25:
+        return
+    _describir_y_guardar(b64)
 
 
 _ultimo_uso = None
@@ -1282,6 +1376,8 @@ def resolver_pendiente(sesion, mensaje):
 def pipeline(mensaje, sesion, hablar, autonomo=False):
     with LOCK:
         historial = list(sesion["hist"])
+    if not autonomo:
+        refrescar_vista()
     pesado = _es_pesado(mensaje)
     raw = consultar_groq(historial, mensaje, pesado=pesado)
 
@@ -1399,7 +1495,8 @@ def api_estado():
         esp32={"conectado": bool(d["esp32_poll"]) and ahora - d["esp32_poll"] < CONECTADO_TTL},
         memoria=perfil_col is not None,
         modelo=_ultimo_uso,
-        vision=hay_vision(),
+        vision={"ok": hay_vision() and not VISION["error"], "modelo": VISION["modelo"],
+                "error": VISION["error"] or None},
         ojos={"activo": ojos_activos(), "emitiendo": ojos_emitiendo()},
         cerebro={"grande": LLM_GRANDE_MODEL or None, "local": LLM_LOCAL_MODEL or None,
                  "groq": bool(GROQ_API_KEY)},
@@ -1563,16 +1660,7 @@ def api_vista():
     if not imagen or len(imagen) > 3_000_000:
         return jsonify(error="Falta la imagen o es demasiado grande."), 400
 
-    def _trabajo():
-        txt = preguntar_vision(imagen, "Describe en UNA frase corta lo que ves: personas, qué hacen y "
-                                       "objetos relevantes. Si no hay nadie, dilo.")
-        if txt.startswith(("No pude", "No tengo forma", "No logré")):
-            return                                  # no pisar una buena descripción con un error
-        with LOCK:
-            if OJOS["activo"] and time.time() < OJOS["hasta"]:     # ¿se cerraron mientras tanto?
-                VISTA.update(texto=txt[:400], ts=time.time())
-
-    threading.Thread(target=_trabajo, daemon=True).start()
+    threading.Thread(target=_describir_y_guardar, args=(imagen,), daemon=True).start()
     return jsonify(ok=True)
 
 
@@ -1970,7 +2058,7 @@ function pintarEstado(e) {
   if (o.activo && o.emitiendo) pastilla('#pOjos', 'warn', 'Ojos abiertos (cámara encendida)');
   else if (o.activo) pastilla('#pOjos', 'bad', 'Ojos pedidos: la laptop no responde');
   else pastilla('#pOjos', '', 'Ojos cerrados');
-  camara(o);
+  camara(o, e.vision);
 }
 
 let presetsListos = false;
@@ -2142,14 +2230,19 @@ if (!Reconocimiento) {
 
 /* ---------- Pantalla de la cámara ---------- */
 let camTs = 0, camTimer = null;
-function camara(o) {
+function camara(o, v) {
   $('#camara').hidden = !o.activo;
   if (!o.activo) {
     clearInterval(camTimer); camTimer = null; camTs = 0;
     $('#camImg').removeAttribute('src');
     return;
   }
-  $('#camTexto').textContent = o.emitiendo ? 'En vivo' : 'Esperando imagen de la laptop…';
+  let t = o.emitiendo ? 'En vivo' : 'Esperando imagen de la laptop…';
+  if (o.emitiendo && v) {
+    if (v.error) t += ' · la visión falló: ' + String(v.error).slice(0, 90);
+    else if (v.modelo) t += ' · analizando con ' + v.modelo;
+  }
+  $('#camTexto').textContent = t;
   if (!camTimer) camTimer = setInterval(traerCamara, 1500);
 }
 async function traerCamara() {
