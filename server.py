@@ -15,7 +15,10 @@ Variables de entorno:
                                  Ej.: http://localhost:11434/v1
   LLM_LOCAL_MODEL  (opcional)    nombre del modelo local. Ej.: qwen2.5:7b
   LLM_LOCAL_KEY    (opcional)    clave del servidor local, si la tiene (Ollama no la necesita)
-  LLM_SOLO_LOCAL   (opcional)    "1" = NUNCA usar Groq: todo se queda en tu equipo
+  LLM_SOLO_LOCAL   (opcional)    "1" = NUNCA usar Groq (ni para chat ni para imágenes): todo se queda en tu equipo
+  LLM_VISION_MODEL (opcional)    modelo con visión propio para la cámara (Ollama). Ej.: qwen2.5vl:7b o gemma3:4b
+  LLM_VISION_URL   (opcional)    servidor de ese modelo; si no la pones, usa LLM_LOCAL_URL
+  LLM_VISION_KEY   (opcional)    clave de ese servidor, si la tiene
   MONGO_URI        (opcional)    memoria, luz, tareas y eventos persistentes en MongoDB Atlas
   LOGAN_TZ         (opcional)    zona horaria, por defecto America/Lima
   LOGAN_MODELOS    (opcional)    modelos preferidos separados por coma
@@ -64,7 +67,7 @@ LLM_GRANDE_URL = _env("LLM_GRANDE_URL").rstrip("/")
 LLM_GRANDE_MODEL = _env("LLM_GRANDE_MODEL")
 LLM_GRANDE_KEY = _env("LLM_GRANDE_KEY")
 LLM_LOCAL_URL = _env("LLM_LOCAL_URL").rstrip("/")
-LLM_LOCAL_MODEL = _env("LLM_LOCAL_MODEL", "qwen2.5:3b")
+LLM_LOCAL_MODEL = _env("LLM_LOCAL_MODEL")
 LLM_LOCAL_KEY = _env("LLM_LOCAL_KEY", "local")
 LLM_SOLO_LOCAL = _env("LLM_SOLO_LOCAL").lower() in ("1", "true", "si", "sí", "yes")
 CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS").split(",") if o.strip()]
@@ -536,7 +539,7 @@ def programar_tarea(valor):
     seg = _clamp(m.group(2), 5, 7 * 86400)
     cada = bool(m.group(1))
     if cada:
-        seg = max(seg, 60)
+        seg = max(seg, 300)     # cada ejecución gasta tokens: mínimo 5 minutos
     with LOCK:
         if len(TAREAS) >= MAX_TAREAS:
             return None
@@ -814,7 +817,7 @@ Ojos (cámara en vivo):
 
 Tareas independientes (actúas por tu cuenta a la hora indicada):
 - Una vez: [[TAREA: segundos | qué debes hacer o decir]]
-- Repetida: [[TAREA: cada segundos | qué debes hacer o decir]] (mínimo cada 60 segundos)
+- Repetida: [[TAREA: cada segundos | qué debes hacer o decir]] (mínimo cada 300 segundos; no la uses para vigilar sensores: tu sensor de puerta ya te avisa solo)
 - Cancelar todas: [[TAREA: CANCELAR]]
 
 Memoria:
@@ -900,8 +903,13 @@ def hay_cerebro():
 
 
 LLM_VISION_MODEL = _env("LLM_VISION_MODEL")
+LLM_VISION_URL = (_env("LLM_VISION_URL") or (LLM_LOCAL_URL if LLM_VISION_MODEL else "")).rstrip("/")
+LLM_VISION_KEY = _env("LLM_VISION_KEY") or LLM_LOCAL_KEY
+VISION_LOCAL = bool(LLM_VISION_URL and LLM_VISION_MODEL)    # visión en tu propio equipo (Ollama, etc.)
 # Groq retira modelos con frecuencia: se prueban varios en orden y se recuerda el que funciona.
-MODELOS_VISION = [m for m in [LLM_VISION_MODEL, "qwen/qwen3.6-27b",
+# Confirmados y activos hoy (verificado): llama-4-scout y llama-4-maverick. "qwen3.6-27b" no existe
+# en el catálogo de Groq (no es un modelo real), así que se quitó de esta lista.
+MODELOS_VISION = [m for m in [LLM_VISION_MODEL if not VISION_LOCAL else "",
                               "meta-llama/llama-4-scout-17b-16e-instruct",
                               "meta-llama/llama-4-maverick-17b-128e-instruct"] if m]
 FALLOS_VISION = ("No pude", "No tengo forma", "No logré")
@@ -909,19 +917,29 @@ PROMPT_VISTA = ("Describe en UNA frase corta lo que ves: personas, qué hacen y 
                 "Si no hay nadie, dilo.")
 VISION = {"modelo": None, "error": "", "ts": 0.0}   # último resultado de la visión (para diagnosticar)
 _vision_bueno = None
+_vision_lock = threading.Lock()                      # una descripción a la vez (un modelo local no da para más)
+
+
+def _groq_vision_permitido():
+    """Con LLM_SOLO_LOCAL las fotos de tu cámara NUNCA salen a Groq."""
+    return bool(GROQ_API_KEY) and not LLM_SOLO_LOCAL
 
 
 def hay_vision():
-    return bool(GROQ_API_KEY)
+    return VISION_LOCAL or _groq_vision_permitido()
+
+
+def _limpiar_pensamiento(txt):
+    return re.sub(r"<think>.*?</think>", "", txt or "", flags=re.DOTALL).strip()
 
 
 def _modelos_vision():
     base = list(dict.fromkeys(MODELOS_VISION))
     activos = modelos_activos()
     if activos:
-        filtrados = [m for m in base if m in activos or (LLM_VISION_MODEL and m == LLM_VISION_MODEL)]
+        filtrados = [m for m in base if m in activos]
         extra = [m for m in activos if m not in base
-                 and any(x in m.lower() for x in ("scout", "maverick", "vision", "qwen3.6"))]
+                 and any(x in m.lower() for x in ("scout", "maverick", "vision"))]
         base = (filtrados + extra) or base
     with LOCK:
         if _vision_bueno in base:
@@ -932,81 +950,116 @@ def _modelos_vision():
     return (libres or base)[:4]
 
 
+def _vision_local(contenido):
+    payload = {"model": LLM_VISION_MODEL, "max_tokens": 400,
+               "messages": [{"role": "user", "content": contenido}]}
+    data = _llm(LLM_VISION_URL, LLM_VISION_KEY, "/chat/completions", payload, timeout=60)
+    txt = _limpiar_pensamiento(data["choices"][0]["message"].get("content"))
+    if not txt:
+        raise ValueError("respuesta vacía")
+    return txt
+
+
 def preguntar_vision(imagen_b64, pregunta):
-    """Le muestra una foto (base64, jpeg) a un modelo con visión de Groq y devuelve su descripción.
-    Prueba varios modelos (Groq los retira seguido) y guarda en VISION el último error para diagnosticar."""
+    """Le muestra una foto (base64, jpeg) a un modelo con visión y devuelve su descripción.
+    Orden: modelo local (si está configurado) -> Groq (si está permitido). Guarda en VISION el último
+    error para diagnosticar."""
     global _vision_bueno
-    if not GROQ_API_KEY:
-        VISION.update(error="falta GROQ_API_KEY en el servidor", ts=time.time())
-        return ("No tengo forma de ver imágenes ahora mismo: esto necesita GROQ_API_KEY "
-                "configurada en el servidor.")
     contenido = [
         {"type": "text", "text": pregunta or "Describe brevemente y con naturalidad lo que ves."},
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagen_b64}"}},
     ]
-    ultimo_error = "sin modelos de visión disponibles"
-    for modelo in _modelos_vision():
-        variantes = [{}]
-        if modelo.startswith("qwen/"):      # modelo que razona: sin razonamiento, o se come los tokens
-            variantes = [{"reasoning_effort": "none", "max_tokens": 700}, {"max_tokens": 900}]
-        for extra in variantes:
-            payload = {"model": modelo, "max_tokens": 350,
-                       "messages": [{"role": "user", "content": contenido}]}
-            payload.update(extra)
-            try:
-                data = _groq("/chat/completions", payload, timeout=25)
-                txt = (data["choices"][0]["message"].get("content") or "")
-                txt = re.sub(r"<think>.*?</think>", "", txt, flags=re.DOTALL).strip()
-                if not txt:
-                    raise ValueError("respuesta vacía")
-                with LOCK:
-                    _vision_bueno = modelo
-                VISION.update(modelo=modelo, error="", ts=time.time())
-                log.info("👁️ Visión OK con %s", modelo)
-                return txt
-            except urllib.error.HTTPError as e:
+    ultimo_error = ""
+
+    if VISION_LOCAL and (LLM_SOLO_LOCAL or _cooldown.get("vision:local", 0) <= time.time()):
+        try:
+            txt = _vision_local(contenido)
+            VISION.update(modelo="local:" + LLM_VISION_MODEL, error="", ts=time.time())
+            log.info("👁️ Visión OK con el modelo local %s", LLM_VISION_MODEL)
+            return txt
+        except Exception as e:
+            detalle = str(e)
+            if isinstance(e, urllib.error.HTTPError):
                 try:
-                    cuerpo = e.read().decode("utf-8")[:200]
+                    detalle += " " + e.read().decode("utf-8")[:150]
                 except Exception:
-                    cuerpo = ""
-                ultimo_error = f"{modelo}: HTTP {e.code} {cuerpo}"
-                log.warning("⚠️ Visión falló: %s", ultimo_error)
-                if e.code in (401, 403):
-                    VISION.update(error=ultimo_error[:200], ts=time.time())
-                    return "No pude procesar la imagen: la clave de Groq no es válida."
-                if e.code == 400 and extra is variantes[0] and len(variantes) > 1:
-                    continue                # reintenta sin 'reasoning_effort'
-                if e.code == 429:
-                    try:
-                        espera = int(e.headers.get("Retry-After", "30"))
-                    except ValueError:
-                        espera = 30
-                elif e.code in (400, 404, 410, 422):
-                    espera = 600
-                else:
-                    espera = 20
-                with LOCK:
-                    _cooldown["vision:" + modelo] = time.time() + espera
-                break
-            except Exception as e:
-                ultimo_error = f"{modelo}: {e}"
-                log.warning("⚠️ Visión falló: %s", ultimo_error)
-                with LOCK:
-                    _cooldown["vision:" + modelo] = time.time() + 15
-                break
+                    pass
+            ultimo_error = f"local {LLM_VISION_MODEL}: {detalle}"
+            log.warning("⚠️ Visión local falló: %s", ultimo_error)
+            with LOCK:
+                _cooldown["vision:local"] = time.time() + 15
+
+    if not _groq_vision_permitido():
+        if not ultimo_error:
+            ultimo_error = ("sin modelo de visión: define LLM_VISION_MODEL (por ejemplo un modelo de "
+                            "Ollama)" if LLM_SOLO_LOCAL else "falta GROQ_API_KEY y LLM_VISION_MODEL")
+        VISION.update(error=ultimo_error[:200], ts=time.time())
+        return "No tengo forma de ver imágenes ahora mismo: no hay un modelo de visión disponible."
+
+    ultimo_error = ultimo_error or "sin modelos de visión disponibles"
+    for modelo in _modelos_vision():
+        payload = {"model": modelo, "max_tokens": 350,
+                   "messages": [{"role": "user", "content": contenido}]}
+        try:
+            data = _groq("/chat/completions", payload, timeout=25)
+            txt = _limpiar_pensamiento(data["choices"][0]["message"].get("content"))
+            if not txt:
+                raise ValueError("respuesta vacía")
+            with LOCK:
+                _vision_bueno = modelo
+            VISION.update(modelo=modelo, error="", ts=time.time())
+            log.info("👁️ Visión OK con %s", modelo)
+            return txt
+        except urllib.error.HTTPError as e:
+            try:
+                cuerpo = e.read().decode("utf-8")[:200]
+            except Exception:
+                cuerpo = ""
+            ultimo_error = f"{modelo}: HTTP {e.code} {cuerpo}"
+            log.warning("⚠️ Visión falló: %s", ultimo_error)
+            if e.code in (401, 403):
+                VISION.update(error=ultimo_error[:200], ts=time.time())
+                return "No pude procesar la imagen: la clave de Groq no es válida."
+            if e.code == 429:
+                try:
+                    espera = int(e.headers.get("Retry-After", "30"))
+                except ValueError:
+                    espera = 30
+            elif e.code in (400, 404, 410, 422):
+                espera = 600
+            else:
+                espera = 20
+            with LOCK:
+                _cooldown["vision:" + modelo] = time.time() + espera
+        except Exception as e:
+            ultimo_error = f"{modelo}: {e}"
+            log.warning("⚠️ Visión falló: %s", ultimo_error)
+            with LOCK:
+                _cooldown["vision:" + modelo] = time.time() + 15
     VISION.update(error=ultimo_error[:200], ts=time.time())
     return "No pude procesar la imagen ahora mismo."
 
 
-def _describir_y_guardar(imagen_b64):
-    """Describe un cuadro y lo deja en VISTA (lo que Logan 've'). Devuelve True si hubo descripción."""
-    txt = preguntar_vision(imagen_b64, PROMPT_VISTA)
-    if txt.startswith(FALLOS_VISION):
-        return False                                # no pisar una buena descripción con un error
-    with LOCK:
-        if OJOS["activo"] and time.time() < OJOS["hasta"]:     # ¿se cerraron mientras tanto?
-            VISTA.update(texto=txt[:400], ts=time.time())
-    return True
+def _describir_y_guardar(imagen_b64, esperar=False):
+    """Describe un cuadro y lo deja en VISTA (lo que Logan 've'). Una a la vez: si ya hay una descripción
+    en curso, las subidas automáticas se saltan; las que vienen de una pregunta tuya esperan su turno."""
+    adquirido = _vision_lock.acquire(timeout=45) if esperar else _vision_lock.acquire(False)
+    if not adquirido:
+        return False
+    try:
+        if esperar:
+            with LOCK:
+                if VISTA["texto"] and time.time() - VISTA["ts"] < 20:
+                    return True                     # la descripción en curso ya la dejó fresca
+        txt = preguntar_vision(imagen_b64, PROMPT_VISTA)
+        if txt.startswith(FALLOS_VISION):
+            return False                            # no pisar una buena descripción con un error
+        with LOCK:
+            if OJOS["activo"] and time.time() < OJOS["hasta"]:     # ¿se cerraron mientras tanto?
+                VISTA.update(texto=txt[:400], ts=time.time())
+        return True
+    finally:
+        _vision_lock.release()
 
 
 def refrescar_vista(max_edad=20):
@@ -1020,7 +1073,7 @@ def refrescar_vista(max_edad=20):
         fresca = bool(VISTA["texto"]) and ahora - VISTA["ts"] < max_edad
     if fresca or not b64 or ahora - ts_prev > 25:
         return
-    _describir_y_guardar(b64)
+    _describir_y_guardar(b64, esperar=True)
 
 
 _ultimo_uso = None
@@ -1496,7 +1549,7 @@ def api_estado():
         memoria=perfil_col is not None,
         modelo=_ultimo_uso,
         vision={"ok": hay_vision() and not VISION["error"], "modelo": VISION["modelo"],
-                "error": VISION["error"] or None},
+                "error": VISION["error"] or None, "local": VISION_LOCAL},
         ojos={"activo": ojos_activos(), "emitiendo": ojos_emitiendo()},
         cerebro={"grande": LLM_GRANDE_MODEL or None, "local": LLM_LOCAL_MODEL or None,
                  "groq": bool(GROQ_API_KEY)},
@@ -1855,6 +1908,8 @@ button:disabled{opacity:.5;cursor:default}
 #puertaError{color:var(--bad);min-height:1.3em}
 [hidden]{display:none!important}
 #camara{margin-bottom:16px}
+.tarea{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:.9rem}
+.tarea span{overflow-wrap:anywhere}
 .camcab{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 .camcab h2{margin:0 0 10px}
 #camTexto{font-size:.85rem;color:var(--muted)}
@@ -1913,6 +1968,10 @@ button:disabled{opacity:.5;cursor:default}
           <button data-tipo="OJOS" data-valor="ON|10">Activar ojos</button>
           <button data-tipo="OJOS" data-valor="OFF">Cerrar ojos</button>
         </div>
+      </div>
+      <div id="tareasBox" hidden>
+        <h2>Tareas programadas</h2>
+        <div id="tareasLista"></div>
       </div>
       <p id="aviso" role="status" aria-live="polite"></p>
     </section>
@@ -2059,6 +2118,7 @@ function pintarEstado(e) {
   else if (o.activo) pastilla('#pOjos', 'bad', 'Ojos pedidos: la laptop no responde');
   else pastilla('#pOjos', '', 'Ojos cerrados');
   camara(o, e.vision);
+  tareas(e.tareas || 0);
 }
 
 let presetsListos = false;
@@ -2228,6 +2288,36 @@ if (!Reconocimiento) {
   });
 }
 
+/* ---------- Tareas programadas ---------- */
+let tareasN = -1;
+async function tareas(n) {
+  $('#tareasBox').hidden = !n;
+  if (n === tareasN) return;
+  tareasN = n;
+  const cont = $('#tareasLista');
+  cont.textContent = '';
+  if (!n) return;
+  try {
+    const r = await api('/api/tareas');
+    (r.data.tareas || []).forEach(t => {
+      const fila = document.createElement('div');
+      fila.className = 'tarea';
+      const tx = document.createElement('span');
+      tx.textContent = (t.cada_s ? 'Cada ' + t.cada_s + ' s: ' : 'En ' + t.en_s + ' s: ') + t.texto;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Quitar';
+      b.addEventListener('click', async () => {
+        try { await api('/api/tareas/' + encodeURIComponent(t.id), null, 'DELETE'); } catch (e) {}
+        tareasN = -1;
+        actualizar();
+      });
+      fila.append(tx, b);
+      cont.appendChild(fila);
+    });
+  } catch (e) { tareasN = -1; }
+}
+
 /* ---------- Pantalla de la cámara ---------- */
 let camTs = 0, camTimer = null;
 function camara(o, v) {
@@ -2285,6 +2375,10 @@ if LLM_GRANDE_URL and LLM_GRANDE_MODEL:
 if LLM_LOCAL_URL and LLM_LOCAL_MODEL:
     log.info("🧠 Modelo local: %s en %s%s", LLM_LOCAL_MODEL, LLM_LOCAL_URL,
              " (modo 100% local, sin Groq)" if LLM_SOLO_LOCAL else " (Groq de respaldo)")
+if VISION_LOCAL:
+    log.info("👁️ Visión local: %s en %s", LLM_VISION_MODEL, LLM_VISION_URL)
+elif LLM_SOLO_LOCAL:
+    log.info("ℹ️ Modo 100%% local sin LLM_VISION_MODEL: Logan no podrá describir imágenes.")
 if not TAVILY_API_KEY:
     log.info("ℹ️ Sin TAVILY_API_KEY: las búsquedas usarán Wikipedia (sin noticias actuales).")
 
