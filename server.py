@@ -71,6 +71,9 @@ LLM_LOCAL_MODEL = _env("LLM_LOCAL_MODEL")
 LLM_LOCAL_KEY = _env("LLM_LOCAL_KEY", "local")
 LLM_SOLO_LOCAL = _env("LLM_SOLO_LOCAL").lower() in ("1", "true", "si", "sí", "yes")
 CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS").split(",") if o.strip()]
+# Dirección de tu laptop (local o Tailscale) para que el PANEL WEB también cambie solo
+# cuando este servidor (normalmente Render) no responde. Opcional pero recomendada.
+URL_PANEL_RESPALDO = _env("URL_PANEL_RESPALDO").rstrip("/")
 
 try:
     from zoneinfo import ZoneInfo
@@ -110,9 +113,14 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024   # 2 MB: ya no hay límite de caracteres por mensaje
 app.json.ensure_ascii = False
 
-if CORS_ORIGINS:
+try:
     from flask_cors import CORS
-    CORS(app, origins=CORS_ORIGINS, allow_headers=["Content-Type", "X-Token", "Authorization"])
+    # Siempre activo: el token sigue siendo obligatorio en cada endpoint, así que abrir CORS no
+    # expone nada; solo permite que el panel, si Render falla, pueda hablarle a tu laptop directo.
+    CORS(app, origins=CORS_ORIGINS or "*", allow_headers=["Content-Type", "X-Token", "Authorization"])
+except ImportError:
+    log.warning("⚠️ Falta flask-cors (revisa requirements.txt): el respaldo automático del "
+                "PANEL WEB no funcionará entre servidores distintos, pero todo lo demás sí.")
 
 # ==============================================================================
 # UTILIDADES
@@ -1483,7 +1491,8 @@ def pipeline(mensaje, sesion, hablar, autonomo=False):
 # ==============================================================================
 @app.get("/")
 def dashboard():
-    return Response(HTML_DASHBOARD, mimetype="text/html")
+    html = HTML_DASHBOARD.replace("__RESPALDO_URL__", URL_PANEL_RESPALDO)
+    return Response(html, mimetype="text/html")
 
 
 @app.get("/health")
@@ -2013,6 +2022,17 @@ const almacen = {
   borrar(k){ try { localStorage.removeItem(k); } catch (e) {} }
 };
 
+const RESPALDO = "__RESPALDO_URL__";
+let usandoRespaldo = (almacen.leer('logan_base') === 'respaldo');
+let ultimoIntentoPrincipal = 0;
+const REINTENTO_PRINCIPAL_MS = 120000;
+function baseActual() { return usandoRespaldo && RESPALDO ? RESPALDO : ''; }
+function cambiarABase(cualBase) {
+  usandoRespaldo = (cualBase === 'respaldo');
+  almacen.guardar('logan_base', cualBase);
+  ultimoIntentoPrincipal = Date.now();
+}
+
 let token = almacen.leer('logan_token');
 let sid = almacen.leer('logan_sid');
 if (!sid) {
@@ -2038,13 +2058,42 @@ function confirmarClave() {
 $('#tokenOk').addEventListener('click', confirmarClave);
 $('#tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') confirmarClave(); });
 
-/* ---------- API ---------- */
+/* ---------- API (con respaldo automático a tu laptop si el principal no responde) ---------- */
+async function _fetchCon(base, ruta, cuerpo, metodo, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(base + ruta, {
+      method: metodo || (cuerpo ? 'POST' : 'GET'),
+      headers: { 'Content-Type': 'application/json', 'X-Token': token },
+      body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+      signal: ctrl.signal
+    });
+  } finally { clearTimeout(t); }
+}
+
 async function api(ruta, cuerpo, metodo) {
-  const res = await fetch(ruta, {
-    method: metodo || (cuerpo ? 'POST' : 'GET'),
-    headers: { 'Content-Type': 'application/json', 'X-Token': token },
-    body: cuerpo ? JSON.stringify(cuerpo) : undefined
-  });
+  if (usandoRespaldo && RESPALDO && Date.now() - ultimoIntentoPrincipal > REINTENTO_PRINCIPAL_MS) {
+    cambiarABase('principal');   // cada 2 min, reintenta el servidor de siempre
+  }
+
+  let res;
+  try {
+    res = await _fetchCon(baseActual(), ruta, cuerpo, metodo, 9000);
+  } catch (eRed) {
+    if (!usandoRespaldo && RESPALDO) {
+      aviso('El servidor principal no respondió. Probando tu laptop...', true);
+      cambiarABase('respaldo');
+      try {
+        res = await _fetchCon(baseActual(), ruta, cuerpo, metodo, 9000);
+      } catch (eRed2) {
+        throw new Error('red');
+      }
+    } else {
+      throw new Error('red');
+    }
+  }
+
   let data = {};
   try { data = await res.json(); } catch (e) {}
   if (res.status === 401) {
