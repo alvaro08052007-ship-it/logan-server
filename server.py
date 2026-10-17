@@ -45,8 +45,8 @@ MONGO_URI = env("MONGO_URI")
 FOTO_URL = env("FOTO_URL")
 NOMBRE = env("USUARIA_NOMBRE", "Milagros")
 ALVARO = env("ALVARO_NOMBRE", "Álvaro")
-SOBRE_ALVARO = env("SOBRE_ALVARO", "Le digo princesa y mi vida. Soy bromista pero tierno. Siempre le recuerdo que come bien y descanse. Le encanta cuando le digo que estoy orgulloso de ella. Me encanta mucho sus ojos y oyuelos cuando sonrie")
-SOBRE_ELLA = env("SOBRE_ELLA", "Ella me dice Ojete o Honey de cariño, es una chica muy dulce y hermosa. Una gran persona que siempre se esfuerza por mejorar")
+SOBRE_ALVARO = env("SOBRE_ALVARO")
+SOBRE_ELLA = env("SOBRE_ELLA")
 AYUDA = env("LINEA_AYUDA", "la Línea 113, opción 5 (salud mental, gratuita en Perú), o al SAMU 106 si es una emergencia")
 try:
     from zoneinfo import ZoneInfo
@@ -63,7 +63,8 @@ try:
 except Exception:
     app.config["JSON_AS_ASCII"] = False
 
-luz = {"state": "OFF", "r": 255, "g": 105, "b": 180, "brightness": 180}
+luz = {"state": "OFF", "r": 255, "g": 105, "b": 180, "brightness": 180,
+       "modo": "SOLIDO", "colores": [], "tam": 1}
 datos = {}                      # lo que Honey recuerda de ella
 animos = []                     # registro de ánimo [{f, n, nota}]
 recs = []                       # recordatorios diarios [{hora, texto, ultimo}]
@@ -99,7 +100,7 @@ def guardar():
     if col is None:
         return
     with LOCK:
-        doc = {"luz": dict(luz), "datos": dict(datos), "animos": list(animos),
+        doc = {"luz": json.loads(json.dumps(luz)), "datos": dict(datos), "animos": list(animos),
                "recs": [dict(r) for r in recs],
                "hist": {k: list(v) for k, v in list(HIST.items())[-5:]}}
 
@@ -122,9 +123,49 @@ def clamp(v, a, b):
 
 def publica():
     with LOCK:
-        d = dict(luz)
+        d = json.loads(json.dumps(luz))
     d["brillo_pct"] = round(d["brightness"] / 255 * 100)
     return d
+
+
+# ---------- Luces: colores, patrones ----------
+MODOS = {"SOLIDO", "MITAD", "INTERCALADO", "DEGRADE", "ARCOIRIS"}
+ALIAS_MODO = {"INTERCALAR": "INTERCALADO", "ALTERNADO": "INTERCALADO", "ALTERNAR": "INTERCALADO",
+              "MEDIO": "MITAD", "MITADES": "MITAD", "GRADIENTE": "DEGRADE", "DEGRADADO": "DEGRADE"}
+
+
+def parse_color(t):
+    t = norm(t)
+    if t in COLORES:
+        return COLORES[t]
+    n = re.findall(r"\d+", t)
+    if len(n) >= 3:
+        return tuple(clamp(x, 0, 255) for x in n[:3])
+    return None
+
+
+def aplicar_patron(val):
+    partes = [p.strip() for p in val.split("|")]
+    modo = norm(partes[0]).replace(" ", "")
+    modo = ALIAS_MODO.get(modo, modo)
+    if modo not in MODOS:
+        return False
+    with LOCK:
+        if modo in ("SOLIDO", "ARCOIRIS"):
+            luz.update(modo=modo, colores=[], state="ON")
+            return True
+        crudos = partes[1].split(";") if len(partes) > 1 else []
+        cols = [c for c in (parse_color(x) for x in crudos) if c][:6]
+        if len(cols) < 2:
+            return False
+        tam = 1
+        if len(partes) > 2:
+            n = re.findall(r"\d+", partes[2])
+            if n:
+                tam = clamp(n[0], 1, 30)
+        luz.update(modo=modo, colores=[list(c) for c in cols], tam=tam,
+                   r=cols[0][0], g=cols[0][1], b=cols[0][2], state="ON")
+    return True
 
 
 def aplicar_luz(valor):
@@ -135,10 +176,11 @@ def aplicar_luz(valor):
         if vn in ("ON", "OFF"):
             luz["state"] = vn
         elif vn.startswith("RGB") and len(nums) >= 3:
-            luz.update(r=clamp(nums[0], 0, 255), g=clamp(nums[1], 0, 255), b=clamp(nums[2], 0, 255), state="ON")
+            luz.update(r=clamp(nums[0], 0, 255), g=clamp(nums[1], 0, 255), b=clamp(nums[2], 0, 255),
+                       state="ON", modo="SOLIDO", colores=[])
         elif vn.startswith("COLOR") and ":" in vn and vn.split(":", 1)[1].strip() in COLORES:
             r, g, b = COLORES[vn.split(":", 1)[1].strip()]
-            luz.update(r=r, g=g, b=b, state="ON")
+            luz.update(r=r, g=g, b=b, state="ON", modo="SOLIDO", colores=[])
         elif vn.startswith("BRILLO") and nums:
             luz.update(brightness=int(clamp(nums[0], 10, 100) / 100 * 255), state="ON")
         else:
@@ -146,6 +188,7 @@ def aplicar_luz(valor):
     return True
 
 
+# ---------- Memoria, ánimo, recordatorios ----------
 def clave_mem(k):
     return re.sub(r"[^a-z0-9_]+", "_", norm(k).lower()).strip("_")[:40]
 
@@ -246,8 +289,13 @@ def texto_crisis():
 def prompt(crisis=False):
     l = publica()
     ahora = datetime.now(TZ)
-    estado_luz = (f"encendida, RGB({l['r']}, {l['g']}, {l['b']}), brillo {l['brillo_pct']}%"
-                  if l["state"] == "ON" else "apagada")
+    if l["state"] == "ON":
+        if l.get("modo", "SOLIDO") != "SOLIDO":
+            estado_luz = f"encendida, patrón {l['modo']}, brillo {l['brillo_pct']}%"
+        else:
+            estado_luz = f"encendida, RGB({l['r']}, {l['g']}, {l['b']}), brillo {l['brillo_pct']}%"
+    else:
+        estado_luz = "apagada"
     with LOCK:
         recuerdos = json.dumps(datos, ensure_ascii=False)
         ult = list(animos[-7:])
@@ -289,6 +337,7 @@ ETIQUETAS (al final de tu respuesta; nunca las expliques ni las nombres; no diga
 - Color exacto: [[LUZ:RGB: R, G, B]] (0 a 255). Rosado suave [[LUZ:RGB: 255, 105, 180]], lavanda [[LUZ:RGB: 180, 130, 255]], atardecer [[LUZ:RGB: 255, 100, 20]], vela [[LUZ:RGB: 255, 140, 40]], romántico [[LUZ:RGB: 255, 40, 110]].
 - Color básico: [[LUZ:COLOR: NOMBRE]] (ROJO, VERDE, AZUL, BLANCO, CALIDO, AMARILLO, MORADO, ROSADO, CIAN, NARANJA, TURQUESA).
 - Encender o apagar: [[LUZ:ON]] o [[LUZ:OFF]]. Brillo: [[LUZ:BRILLO: N]] (10 a 100). Puedes combinar varias para crear ambientes.
+- Patrones (la tira tiene 60 luces): [[PATRON: MITAD | ROJO ; AZUL]] divide la tira en partes iguales, una por color (2 a 6 colores). [[PATRON: INTERCALADO | ROJO ; AZUL | N]] alterna colores en bloques de N luces (N de 1 a 30; 1 es luz por luz). [[PATRON: DEGRADE | ROSADO ; MORADO]] transición suave. [[PATRON: ARCOIRIS]] arcoíris en movimiento. [[PATRON: SOLIDO]] vuelve a un solo color. Los colores son nombres básicos o "R,G,B" (ejemplo: 255,105,180).
 - Guardar algo de ella: [[RECORDAR: clave = valor]]. Úsalo con frecuencia para: lo que le gusta, personas importantes, fechas, preocupaciones recurrentes, qué le ayuda y qué no, logros. Olvidar: [[OLVIDAR: clave]].
 - Registrar su ánimo cuando lo expresa claramente: [[ANIMO: N | nota breve]] (N de 1 a 5).
 - Recordatorio diario si lo pide: [[RECORDATORIO: HH:MM | texto]] (hora 24 h). Quitarlo: [[QUITAR_RECORDATORIO: texto]]."""
@@ -341,6 +390,8 @@ def procesar(raw):
         tag, val = norm(m.group(1)), m.group(2).strip()
         if tag == "LUZ":
             hecho.append(aplicar_luz(val))
+        elif tag == "PATRON":
+            hecho.append(aplicar_patron(val))
         elif tag == "RECORDAR" and "=" in val:
             hecho.append(recordar(*[x.strip() for x in val.split("=", 1)]))
         elif tag == "OLVIDAR":
@@ -484,7 +535,8 @@ def api_luz():
                 if not m:
                     return jsonify(error="Color inválido."), 400
                 h = m.group(1)
-                luz.update(r=int(h[:2], 16), g=int(h[2:4], 16), b=int(h[4:], 16), state="ON")
+                luz.update(r=int(h[:2], 16), g=int(h[2:4], 16), b=int(h[4:], 16),
+                           state="ON", modo="SOLIDO", colores=[])
             if "brillo" in d:
                 luz.update(brightness=int(clamp(d["brillo"], 10, 100) / 100 * 255), state="ON")
             if "estado" in d:
@@ -500,8 +552,7 @@ def api_luz():
 @acceso
 def esp32():
     ultima_esp32[0] = time.time()
-    with LOCK:
-        return jsonify(dict(luz))
+    return jsonify(publica())
 
 
 HTML = r"""<!DOCTYPE html>
@@ -643,7 +694,8 @@ let tocando=false,tt;
 function pintar(l){const on=l.state==='ON',p=l.brillo_pct/100,rgb=l.r+','+l.g+','+l.b;
  $('#corazon path').setAttribute('fill',on?'rgb('+rgb+')':'#e6d7e6');
  $('#corazon').style.filter=on?'drop-shadow(0 0 '+(10+30*p)+'px rgba('+rgb+','+(.35+.5*p)+'))':'none';
- $('#luzTxt').textContent=on?'Encendida · brillo '+l.brillo_pct+' %':'Apagada';
+ const pat=l.modo&&l.modo!=='SOLIDO'?' · '+l.modo.toLowerCase():'';
+ $('#luzTxt').textContent=on?'Encendida · brillo '+l.brillo_pct+' %'+pat:'Apagada';
  $('#tog').textContent=on?'Apagar':'Encender';
  if(!tocando){$('#bri').value=l.brillo_pct;$('#briV').textContent=l.brillo_pct+' %'}}
 
